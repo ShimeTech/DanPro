@@ -16,10 +16,10 @@ export class PrismaService
       password: process.env.DATABASE_PASSWORD || '',
       database: process.env.DATABASE_NAME || 'buildpro_ims',
       connectionLimit: 5,
-
-      // Required for Aiven MySQL / remote MySQL
-      ssl: true,
       allowPublicKeyRetrieval: true,
+      ssl: {
+        rejectUnauthorized: false,
+      },
     });
 
     super({ adapter });
