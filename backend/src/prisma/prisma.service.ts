@@ -9,18 +9,22 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   constructor() {
-    const adapter = new PrismaMariaDb({
-      host: process.env.DATABASE_HOST || 'localhost',
-      port: Number(process.env.DATABASE_PORT || 3306),
-      user: process.env.DATABASE_USER || 'root',
-      password: process.env.DATABASE_PASSWORD || '',
-      database: process.env.DATABASE_NAME || 'buildpro_ims',
-      connectionLimit: 5,
-      allowPublicKeyRetrieval: true,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-    });
+const adapter = new PrismaMariaDb({
+  host: process.env.DATABASE_HOST || 'localhost',
+  port: Number(process.env.DATABASE_PORT || 3306),
+  user: process.env.DATABASE_USER || 'root',
+  password: process.env.DATABASE_PASSWORD || '',
+  database: process.env.DATABASE_NAME || 'buildpro_ims',
+
+  connectionLimit: 2,
+  connectTimeout: 30000,
+  acquireTimeout: 30000,
+
+  allowPublicKeyRetrieval: true,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
     super({ adapter });
   }
