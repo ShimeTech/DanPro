@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Download,
   Edit,
   Eye,
   FileJson,
   FileSpreadsheet,
   FileText,
   RefreshCcw,
-  Save,
   Trash2,
   X,
 } from 'lucide-react';
@@ -23,7 +21,6 @@ import type { Project } from '../../api/projects.api';
 import { Button, Card, DataTable, Input, PageHeader } from '../../components/ui';
 
 type DailyReportForm = CreateDailyReportPayload;
-
 type ReportMode = 'create' | 'edit';
 
 const emptyForm: DailyReportForm = {
@@ -46,14 +43,16 @@ export default function DailyReportsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
   const [selectedReport, setSelectedReport] = useState<DailyReport | null>(null);
   const [editingReport, setEditingReport] = useState<DailyReport | null>(null);
+
   const [mode, setMode] = useState<ReportMode>('create');
   const [exportScope, setExportScope] = useState<'all' | 'date'>('all');
   const [exportDate, setExportDate] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
 
   const [form, setForm] = useState<DailyReportForm>(emptyForm);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === Number(selectedProjectId)),
@@ -77,34 +76,67 @@ export default function DailyReportsPage() {
     });
   }, [reports, search]);
 
+  const exportReports = useMemo(() => {
+    if (exportScope === 'date' && exportDate) {
+      return reports.filter((report) => dateKey(report.reportDate) === exportDate);
+    }
+
+    return reports;
+  }, [reports, exportScope, exportDate]);
+
   const reportFileName = useMemo(() => {
     const projectCode = selectedProject?.code || 'project';
     const date = new Date().toISOString().slice(0, 10);
     return `buildpro-daily-reports-${projectCode}-${date}`;
   }, [selectedProject]);
 
-  const isSuccess =
-    message.toLowerCase().includes('successfully');
+  const isSuccess = message.toLowerCase().includes('successfully');
 
   useEffect(() => {
-    loadProjects();
+    loadInitialData();
   }, []);
 
-  async function loadProjects() {
+  async function loadInitialData() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
 
-      const data = await projectsApi.findAll();
-      setProjects(data);
+      const projectData = await projectsApi.findAll();
+      setProjects(projectData);
 
-      if (data.length > 0) {
-        await handleProjectChange(String(data[0].id));
+      if (projectData.length > 0) {
+        const firstProjectId = projectData[0].id;
+
+        setSelectedProjectId(firstProjectId);
+        setForm({
+          ...emptyForm,
+          projectId: firstProjectId,
+        });
+
+        const reportData = await dailyReportsApi.findByProject(firstProjectId);
+        setReports(reportData);
+
+        try {
+          const defaults = await dailyReportsApi.getProjectDefaults(firstProjectId);
+
+          setForm((prev) => ({
+            ...prev,
+            projectId: firstProjectId,
+            weather: defaults.weather || '',
+            manpowerCount: defaults.manpowerCount ?? 0,
+            materialReceived: defaults.materialReceived || '',
+          }));
+        } catch {
+          // Defaults are optional. Keep page usable if defaults fail.
+        }
+      } else {
+        setSelectedProjectId('');
+        setReports([]);
       }
     } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load projects'));
+      setMessage(getErrorMessage(error, 'Failed to load daily reports'));
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
   }
 
@@ -114,50 +146,50 @@ export default function DailyReportsPage() {
       return;
     }
 
-    try {
-      setLoading(true);
-      setMessage('');
-
-      const data = await dailyReportsApi.findByProject(projectId);
-      setReports(data);
-    } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load daily reports'));
-    } finally {
-      setLoading(false);
-    }
+    const data = await dailyReportsApi.findByProject(projectId);
+    setReports(data);
   }
 
   async function handleProjectChange(value: string) {
-    const projectId = Number(value);
+    try {
+      setActionLoading(true);
+      setMessage('');
 
-    setSelectedProjectId(projectId || '');
-    setSelectedReport(null);
-    setEditingReport(null);
-    setMode('create');
+      const projectId = Number(value);
 
-    setForm({
-      ...emptyForm,
-      projectId,
-    });
+      setSelectedProjectId(projectId || '');
+      setSelectedReport(null);
+      setEditingReport(null);
+      setMode('create');
 
-    if (projectId) {
-      await loadReports(projectId);
+      setForm({
+        ...emptyForm,
+        projectId,
+      });
 
-      try {
-        const defaults = await dailyReportsApi.getProjectDefaults(projectId);
+      if (projectId) {
+        await loadReports(projectId);
 
-        setForm((prev) => ({
-          ...prev,
-          projectId,
-          weather: defaults.weather || '',
-          manpowerCount: defaults.manpowerCount ?? 0,
-          materialReceived: defaults.materialReceived || '',
-        }));
-      } catch (error) {
-        console.error('Failed to load project defaults', error);
+        try {
+          const defaults = await dailyReportsApi.getProjectDefaults(projectId);
+
+          setForm((prev) => ({
+            ...prev,
+            projectId,
+            weather: defaults.weather || '',
+            manpowerCount: defaults.manpowerCount ?? 0,
+            materialReceived: defaults.materialReceived || '',
+          }));
+        } catch {
+          // Defaults are optional. Keep page usable if defaults fail.
+        }
+      } else {
+        setReports([]);
       }
-    } else {
-      setReports([]);
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to load daily reports'));
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -171,9 +203,11 @@ export default function DailyReportsPage() {
   function validateForm() {
     if (!form.projectId) return 'Project is required';
     if (!form.reportDate) return 'Report date is required';
+
     if (Number(form.manpowerCount ?? 0) < 0) {
       return 'Manpower count cannot be negative';
     }
+
     return '';
   }
 
@@ -181,13 +215,14 @@ export default function DailyReportsPage() {
     e.preventDefault();
 
     const validationError = validateForm();
+
     if (validationError) {
       setMessage(validationError);
       return;
     }
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       const projectId = Number(form.projectId);
@@ -205,18 +240,15 @@ export default function DailyReportsPage() {
         remarks: form.remarks?.trim() || '',
       };
 
-      let successMessage = '';
-
       if (mode === 'edit' && editingReport) {
         await dailyReportsApi.update(editingReport.id, payload);
-        successMessage = 'Daily report updated successfully';
+        setMessage('Daily report updated successfully');
       } else {
         await dailyReportsApi.create(payload);
-        successMessage = 'Daily report created successfully';
+        setMessage('Daily report created successfully');
       }
 
-      const data = await dailyReportsApi.findByProject(projectId);
-      setReports(data);
+      await loadReports(projectId);
 
       setMode('create');
       setEditingReport(null);
@@ -224,8 +256,6 @@ export default function DailyReportsPage() {
         ...emptyForm,
         projectId,
       });
-
-      setMessage(successMessage);
     } catch (error: any) {
       setMessage(
         getErrorMessage(
@@ -236,7 +266,7 @@ export default function DailyReportsPage() {
         ),
       );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
@@ -247,6 +277,7 @@ export default function DailyReportsPage() {
       ...emptyForm,
       projectId,
     });
+    setMessage('');
   }
 
   function handleView(report: DailyReport) {
@@ -271,14 +302,19 @@ export default function DailyReportsPage() {
       delays: report.delays || '',
       remarks: report.remarks || '',
     });
+
+    setMessage('');
   }
 
   async function handleDelete(id: number) {
-    const confirmed = window.confirm('Delete this daily report? This action will be recorded in the audit log.');
+    const confirmed = window.confirm(
+      'Delete this daily report? This action will be recorded in the audit log.',
+    );
+
     if (!confirmed) return;
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await dailyReportsApi.remove(id);
@@ -290,7 +326,23 @@ export default function DailyReportsPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, 'Failed to delete daily report'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
+    }
+  }
+
+  async function handleRefresh() {
+    if (!selectedProjectId) return;
+
+    try {
+      setActionLoading(true);
+      setMessage('');
+
+      await loadReports(Number(selectedProjectId));
+      setMessage('Daily reports refreshed successfully');
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to refresh daily reports'));
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -298,41 +350,28 @@ export default function DailyReportsPage() {
     return {
       project: selectedProject
         ? {
-          id: selectedProject.id,
-          code: selectedProject.code,
-          name: selectedProject.name,
-        }
+            id: selectedProject.id,
+            code: selectedProject.code,
+            name: selectedProject.name,
+          }
         : null,
       reports,
       exportedAt: new Date().toISOString(),
     };
   }
-  function PdfDetail({ label, value }: { label: string; value: string }) {
-    return (
-      <div>
-        <div style={pdfLabelStyle}>{label}</div>
-        <div style={pdfValueStyle}>{value}</div>
-      </div>
-    );
-  }
 
-  function PdfBlock({ label, value }: { label: string; value?: string | null }) {
-    return (
-      <div style={pdfBlockStyle}>
-        <div style={pdfLabelStyle}>{label}</div>
-        <div style={pdfTextStyle}>{value || '-'}</div>
-      </div>
-    );
-  }
   function downloadFile(content: string, fileName: string, mimeType: string) {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
+
     link.href = url;
     link.download = fileName;
+
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+
     URL.revokeObjectURL(url);
   }
 
@@ -361,7 +400,9 @@ export default function DailyReportsPage() {
       ],
       ...reports.map((report) => [
         formatDate(report.reportDate),
-        `${report.project?.code || selectedProject?.code || ''} - ${report.project?.name || selectedProject?.name || ''}`,
+        `${report.project?.code || selectedProject?.code || ''} - ${
+          report.project?.name || selectedProject?.name || ''
+        }`,
         report.weather || '',
         report.manpowerCount ?? 0,
         report.equipmentUsed || '',
@@ -375,229 +416,230 @@ export default function DailyReportsPage() {
     ];
 
     const csv = rows
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','),
+      )
       .join('\n');
 
     downloadFile(csv, `${reportFileName}.csv`, 'text/csv;charset=utf-8');
   }
 
-
-  const exportReports = useMemo(() => {
-    if (exportScope === 'date' && exportDate) {
-      return reports.filter((report) => dateKey(report.reportDate) === exportDate);
+  function exportPdf() {
+    if (exportScope === 'date' && !exportDate) {
+      setMessage('Please select report date');
+      return;
     }
 
-    return reports;
-  }, [reports, exportScope, exportDate]);
+    if (exportReports.length === 0) {
+      setMessage('No reports found for selected export option');
+      return;
+    }
 
+    setActionLoading(true);
 
-  function exportPdf() {
-  if (exportScope === 'date' && !exportDate) {
-    setMessage('Please select report date');
-    return;
+    const printable = document.createElement('div');
+    printable.innerHTML = buildPdfHtml(exportReports);
+    printable.style.width = '700px';
+    printable.style.background = '#ffffff';
+    printable.style.color = '#111827';
+    printable.style.fontFamily = 'Arial, sans-serif';
+
+    document.body.appendChild(printable);
+
+    const fileDate =
+      exportScope === 'date'
+        ? exportDate
+        : new Date().toISOString().slice(0, 10);
+
+    html2pdf()
+      .set({
+        margin: 12,
+        filename: `daily-site-report-${selectedProject?.code || 'project'}-${fileDate}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+        },
+        jsPDF: {
+          unit: 'mm',
+          format: 'a4',
+          orientation: 'portrait',
+        },
+        pagebreak: {
+          mode: ['css', 'legacy'],
+          avoid: ['.avoid-break'],
+        },
+      })
+      .from(printable)
+      .save()
+      .then(() => {
+        document.body.removeChild(printable);
+        setActionLoading(false);
+      })
+      .catch(() => {
+        document.body.removeChild(printable);
+        setMessage('Failed to export PDF');
+        setActionLoading(false);
+      });
   }
-
-  if (exportReports.length === 0) {
-    setMessage('No reports found for selected export option');
-    return;
-  }
-
-  const printable = document.createElement('div');
-  printable.innerHTML = buildPdfHtml(exportReports);
-  printable.style.width = '700px';
-  printable.style.background = '#ffffff';
-  printable.style.color = '#111827';
-  printable.style.fontFamily = 'Arial, sans-serif';
-
-  document.body.appendChild(printable);
-
-  const fileDate =
-    exportScope === 'date'
-      ? exportDate
-      : new Date().toISOString().slice(0, 10);
-
-  html2pdf()
-    .set({
-      margin: 12,
-      filename: `daily-site-report-${selectedProject?.code || 'project'}-${fileDate}.pdf`,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#ffffff',
-      },
-      jsPDF: {
-        unit: 'mm',
-        format: 'a4',
-        orientation: 'portrait',
-      },
-      pagebreak: {
-        mode: ['css', 'legacy'],
-        avoid: ['.avoid-break'],
-      },
-    })
-    .from(printable)
-    .save()
-    .then(() => {
-      document.body.removeChild(printable);
-    })
-    .catch(() => {
-      document.body.removeChild(printable);
-      setMessage('Failed to export PDF');
-    });
-}
 
   function buildPdfHtml(items: DailyReport[]) {
-  const projectTitle = selectedProject
-    ? `${selectedProject.code} - ${selectedProject.name}`
-    : 'Selected Project';
+    const projectTitle = selectedProject
+      ? `${selectedProject.code} - ${selectedProject.name}`
+      : 'Selected Project';
 
-  const generatedAt = new Date().toLocaleString();
+    const generatedAt = new Date().toLocaleString();
 
-  return `
-    <div style="font-family:Arial,sans-serif;color:#111827;">
-      ${items
-        .map(
-          (report, index) => `
-            <div style="
-              padding:14px;
-              page-break-after:${index === items.length - 1 ? 'auto' : 'always'};
-            ">
+    return `
+      <div style="font-family:Arial,sans-serif;color:#111827;">
+        ${items
+          .map(
+            (report, index) => `
               <div style="
-                border-bottom:3px solid #111827;
-                padding-bottom:10px;
-                margin-bottom:12px;
+                padding:14px;
+                page-break-after:${index === items.length - 1 ? 'auto' : 'always'};
               ">
-                <h1 style="margin:0;font-size:22px;font-weight:800;">
-                  DAILY SITE REPORT
-                </h1>
+                <div style="
+                  border-bottom:3px solid #111827;
+                  padding-bottom:10px;
+                  margin-bottom:12px;
+                ">
+                  <h1 style="margin:0;font-size:22px;font-weight:800;">
+                    DAILY SITE REPORT
+                  </h1>
 
-                <div style="font-size:12px;margin-top:4px;color:#374151;">
-                  ${escapeHtml(projectTitle)}
+                  <div style="font-size:12px;margin-top:4px;color:#374151;">
+                    ${escapeHtml(projectTitle)}
+                  </div>
+                </div>
+
+                <div style="
+                  display:grid;
+                  grid-template-columns:repeat(3, 1fr);
+                  gap:8px;
+                  background:#f9fafb;
+                  border:1px solid #e5e7eb;
+                  padding:10px;
+                  margin-bottom:10px;
+                ">
+                  ${pdfField('Report No', `DSR-${String(report.id).padStart(5, '0')}`)}
+                  ${pdfField('Report Date', formatDate(report.reportDate))}
+                  ${pdfField('Generated', generatedAt)}
+                  ${pdfField(
+                    'Project',
+                    report.project
+                      ? `${report.project.code} - ${report.project.name}`
+                      : projectTitle,
+                  )}
+                  ${pdfField('Prepared By', report.preparedBy?.name || '-')}
+                  ${pdfField('Weather', report.weather || '-')}
+                  ${pdfField('Manpower', String(report.manpowerCount ?? 0))}
+                  ${pdfField('Status', 'Submitted')}
+                  ${pdfField('Document Type', 'Daily Site Report')}
+                </div>
+
+                ${pdfBlock('Equipment Used', report.equipmentUsed)}
+                ${pdfBlock('Work Completed', report.workCompleted)}
+                ${pdfBlock('Material Received', report.materialReceived)}
+                ${pdfBlock('Issues / Constraints', report.issues)}
+                ${pdfBlock('Delays', report.delays)}
+                ${pdfBlock('Remarks', report.remarks)}
+
+                <div class="avoid-break" style="
+                  display:grid;
+                  grid-template-columns:1fr 1fr 1fr;
+                  gap:14px;
+                  margin-top:16px;
+                  padding-top:14px;
+                  border-top:2px solid #e5e7eb;
+                  font-size:11px;
+                  page-break-inside:avoid;
+                  break-inside:avoid;
+                ">
+                  ${signatureBlock('Prepared By')}
+                  ${signatureBlock('Reviewed By')}
+                  ${signatureBlock('Approved By')}
+                </div>
+
+                <div class="avoid-break" style="
+                  margin-top:12px;
+                  font-size:9px;
+                  color:#6b7280;
+                  border-top:1px solid #e5e7eb;
+                  padding-top:6px;
+                  display:flex;
+                  justify-content:space-between;
+                  page-break-inside:avoid;
+                  break-inside:avoid;
+                ">
+                  <span>BuildPro IMS - Daily Site Report</span>
+                  <span>Controlled document generated electronically</span>
                 </div>
               </div>
-
-              <div style="
-                display:grid;
-                grid-template-columns:repeat(3, 1fr);
-                gap:8px;
-                background:#f9fafb;
-                border:1px solid #e5e7eb;
-                padding:10px;
-                margin-bottom:10px;
-              ">
-                ${pdfField('Report No', `DSR-${String(report.id).padStart(5, '0')}`)}
-                ${pdfField('Report Date', formatDate(report.reportDate))}
-                ${pdfField('Generated', generatedAt)}
-
-                ${pdfField('Project', report.project ? `${report.project.code} - ${report.project.name}` : projectTitle)}
-                ${pdfField('Prepared By', report.preparedBy?.name || '-')}
-                ${pdfField('Weather', report.weather || '-')}
-
-                ${pdfField('Manpower', String(report.manpowerCount ?? 0))}
-                ${pdfField('Status', 'Submitted')}
-                ${pdfField('Document Type', 'Daily Site Report')}
-              </div>
-
-              ${pdfBlock('Equipment Used', report.equipmentUsed)}
-              ${pdfBlock('Work Completed', report.workCompleted)}
-              ${pdfBlock('Material Received', report.materialReceived)}
-              ${pdfBlock('Issues / Constraints', report.issues)}
-              ${pdfBlock('Delays', report.delays)}
-              ${pdfBlock('Remarks', report.remarks)}
-
-              <div class="avoid-break" style="
-                display:grid;
-                grid-template-columns:1fr 1fr 1fr;
-                gap:14px;
-                margin-top:16px;
-                padding-top:14px;
-                border-top:2px solid #e5e7eb;
-                font-size:11px;
-                page-break-inside:avoid;
-                break-inside:avoid;
-              ">
-                ${signatureBlock('Prepared By')}
-                ${signatureBlock('Reviewed By')}
-                ${signatureBlock('Approved By')}
-              </div>
-
-              <div class="avoid-break" style="
-                margin-top:12px;
-                font-size:9px;
-                color:#6b7280;
-                border-top:1px solid #e5e7eb;
-                padding-top:6px;
-                display:flex;
-                justify-content:space-between;
-                page-break-inside:avoid;
-                break-inside:avoid;
-              ">
-                <span>BuildPro IMS - Daily Site Report</span>
-                <span>Controlled document generated electronically</span>
-              </div>
-            </div>
-          `,
-        )
-        .join('')}
-    </div>
-  `;
-}
+            `,
+          )
+          .join('')}
+      </div>
+    `;
+  }
 
   function pdfField(label: string, value: string) {
     return `
-    <div>
-      <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">
-        ${escapeHtml(label)}
+      <div>
+        <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;margin-bottom:4px;">
+          ${escapeHtml(label)}
+        </div>
+        <div style="font-size:12px;font-weight:700;color:#111827;">
+          ${escapeHtml(value)}
+        </div>
       </div>
-      <div style="font-size:12px;font-weight:700;color:#111827;">
-        ${escapeHtml(value)}
-      </div>
-    </div>
-  `;
+    `;
   }
 
   function pdfBlock(label: string, value?: string | null) {
     return `
-    <div style="
-      border:1px solid #e5e7eb;
-      margin-top:7px;
-      page-break-inside:avoid;
-      break-inside:avoid;
-    ">
       <div style="
-        background:#f3f4f6;
-        padding:6px 9px;
-        font-size:11px;
-        font-weight:700;
-        color:#374151;
-        text-transform:uppercase;
+        border:1px solid #e5e7eb;
+        margin-top:7px;
+        page-break-inside:avoid;
+        break-inside:avoid;
       ">
-        ${escapeHtml(label)}
-      </div>
+        <div style="
+          background:#f3f4f6;
+          padding:6px 9px;
+          font-size:11px;
+          font-weight:700;
+          color:#374151;
+          text-transform:uppercase;
+        ">
+          ${escapeHtml(label)}
+        </div>
 
-      <div style="
-        min-height:26px;
-        padding:8px 10px;
-        font-size:12px;
-        line-height:1.35;
-        white-space:pre-wrap;
-      ">
-        ${escapeHtml(value || '-')}
+        <div style="
+          min-height:26px;
+          padding:8px 10px;
+          font-size:12px;
+          line-height:1.35;
+          white-space:pre-wrap;
+        ">
+          ${escapeHtml(value || '-')}
+        </div>
       </div>
-    </div>
-  `;
+    `;
   }
+
   function signatureBlock(label: string) {
     return `
-    <div>
-      <strong>${escapeHtml(label)}</strong>
-      <div style="margin-top:22px;border-top:1px solid #111827;padding-top:5px;">
-        Name / Signature / Date
+      <div>
+        <strong>${escapeHtml(label)}</strong>
+        <div style="margin-top:22px;border-top:1px solid #111827;padding-top:5px;">
+          Name / Signature / Date
+        </div>
       </div>
-    </div>
-  `;
+    `;
   }
+
   function escapeHtml(value: string) {
     return String(value)
       .replaceAll('&', '&amp;')
@@ -606,6 +648,7 @@ export default function DailyReportsPage() {
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#039;');
   }
+
   return (
     <div>
       <PageHeader
@@ -613,274 +656,296 @@ export default function DailyReportsPage() {
         description="Record, review, edit, export, and audit daily site reports."
       />
 
-      {message && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: 12,
-            borderRadius: 8,
-            fontWeight: 600,
-            background: isSuccess ? '#dcfce7' : '#fee2e2',
-            color: isSuccess ? '#166534' : '#991b1b',
-            border: isSuccess ? '1px solid #86efac' : '1px solid #fca5a5',
-          }}
-        >
-          {message}
-        </div>
-      )}
+      {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      <div style={summaryGridStyle}>
-        <MetricCard label="Total Reports" value={reports.length} />
-        <MetricCard label="Selected Project" value={selectedProject?.code || '-'} />
-        <MetricCard
-          label="Total Manpower"
-          value={reports.reduce((sum, item) => sum + Number(item.manpowerCount || 0), 0)}
-        />
-        <MetricCard
-          label="Reports With Issues"
-          value={reports.filter((item) => Boolean(item.issues)).length}
-        />
-      </div>
+      {pageLoading ? (
+        <DailyReportsLoading />
+      ) : (
+        <>
+          <div style={summaryGridStyle}>
+            <MetricCard label="Total Reports" value={reports.length} />
+            <MetricCard
+              label="Selected Project"
+              value={selectedProject?.code || '-'}
+            />
+            <MetricCard
+              label="Total Manpower"
+              value={reports.reduce(
+                (sum, item) => sum + Number(item.manpowerCount || 0),
+                0,
+              )}
+            />
+            <MetricCard
+              label="Reports With Issues"
+              value={reports.filter((item) => Boolean(item.issues)).length}
+            />
+          </div>
 
-      <div style={exportOptionsStyle}>
-        <SelectField
-          label="PDF Export Scope"
-          value={exportScope}
-          onChange={(value) => setExportScope(value as 'all' | 'date')}
-        >
-          <option value="all">All Reports</option>
-          <option value="date">Specific Date</option>
-        </SelectField>
-
-        {exportScope === 'date' && (
-          <SelectField
-            label="Export Date"
-            value={exportDate}
-            onChange={setExportDate}
-          >
-            <option value="">Select report date</option>
-            {reports.map((report) => (
-              <option key={report.id} value={dateKey(report.reportDate)}>
-                {formatDate(report.reportDate)}
-              </option>
-            ))}
-          </SelectField>
-        )}
-      </div>
-
-      <div style={actionBarStyle}>
-        <IconActionButton title="Download JSON" onClick={exportJson}>
-          <FileJson size={16} /> JSON
-        </IconActionButton>
-
-        <IconActionButton title="Download CSV" onClick={exportCsv}>
-          <FileSpreadsheet size={16} /> CSV
-        </IconActionButton>
-
-        <IconActionButton title="Download PDF" onClick={exportPdf}>
-          <FileText size={16} /> PDF
-        </IconActionButton>
-
-        <IconActionButton
-          title="Refresh"
-          onClick={() => selectedProjectId && loadReports(Number(selectedProjectId))}
-        >
-          <RefreshCcw size={16} /> Refresh
-        </IconActionButton>
-      </div>
-
-      <div className="module-grid">
-        <Card
-          title={
-            mode === 'edit'
-              ? `Edit Daily Report: ${formatDate(editingReport?.reportDate)}`
-              : 'Create Daily Report'
-          }
-        >
-          <form onSubmit={handleSubmit}>
-            <SelectField label="Project" value={form.projectId} onChange={handleProjectChange}>
-              <option value={0}>Select project</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.code} - {project.name}
-                </option>
-              ))}
+          <div style={exportOptionsStyle}>
+            <SelectField
+              label="PDF Export Scope"
+              value={exportScope}
+              disabled={actionLoading}
+              onChange={(value) => setExportScope(value as 'all' | 'date')}
+            >
+              <option value="all">All Reports</option>
+              <option value="date">Specific Date</option>
             </SelectField>
 
-            <Input
-              label="Report Date"
-              type="date"
-              value={form.reportDate}
-              onChange={(event) => updateField('reportDate', event.target.value)}
-              required
-            />
-
-            <Input
-              label="Weather"
-              value={form.weather}
-              onChange={(event) => updateField('weather', event.target.value)}
-              placeholder="Sunny, cloudy, rainy..."
-            />
-
-            <Input
-              label="Manpower Count"
-              type="number"
-              min={0}
-              value={form.manpowerCount ?? 0}
-              onChange={(event) => updateField('manpowerCount', Number(event.target.value))}
-            />
-
-            <TextareaField
-              label="Equipment Used"
-              value={form.equipmentUsed ?? ''}
-              onChange={(value) => updateField('equipmentUsed', value)}
-            />
-
-            <TextareaField
-              label="Work Completed"
-              value={form.workCompleted ?? ''}
-              onChange={(value) => updateField('workCompleted', value)}
-            />
-
-            <TextareaField
-              label="Material Received"
-              value={form.materialReceived ?? ''}
-              onChange={(value) => updateField('materialReceived', value)}
-            />
-
-            <TextareaField
-              label="Issues"
-              value={form.issues ?? ''}
-              onChange={(value) => updateField('issues', value)}
-            />
-
-            <TextareaField
-              label="Delays"
-              value={form.delays ?? ''}
-              onChange={(value) => updateField('delays', value)}
-            />
-
-            <TextareaField
-              label="Remarks"
-              value={form.remarks ?? ''}
-              onChange={(value) => updateField('remarks', value)}
-            />
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-              <Button disabled={loading} style={{ flex: 1 }}>
-                {loading ? 'Saving...' : mode === 'edit' ? 'Save Changes' : 'Create Report'}
-              </Button>
-
-              {mode === 'edit' && (
-                <Button type="button" variant="secondary" onClick={() => resetForm()}>
-                  Cancel
-                </Button>
-              )}
-            </div>
-          </form>
-        </Card>
-
-        <Card title="Daily Report Register">
-          <div style={toolbarStyle}>
-            <Input
-              label="Search"
-              placeholder="Search weather, work, issues, delays..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+            {exportScope === 'date' && (
+              <SelectField
+                label="Export Date"
+                value={exportDate}
+                disabled={actionLoading}
+                onChange={setExportDate}
+              >
+                <option value="">Select report date</option>
+                {reports.map((report) => (
+                  <option key={report.id} value={dateKey(report.reportDate)}>
+                    {formatDate(report.reportDate)}
+                  </option>
+                ))}
+              </SelectField>
+            )}
           </div>
 
-          {loading && <p>Loading...</p>}
+          <div style={actionBarStyle}>
+            <IconActionButton
+              title="Download JSON"
+              onClick={exportJson}
+              disabled={actionLoading}
+            >
+              <FileJson size={16} /> JSON
+            </IconActionButton>
 
-          <div id="daily-reports-printable">
-            <DataTable<DailyReport>
-              columns={[
-                { header: 'Date', accessor: (row) => formatDate(row.reportDate) },
-                { header: 'Weather', accessor: (row) => row.weather || '-' },
-                { header: 'Manpower', accessor: 'manpowerCount' },
-                { header: 'Work Completed', accessor: (row) => truncate(row.workCompleted) },
-                { header: 'Issues', accessor: (row) => truncate(row.issues) },
-                { header: 'Delays', accessor: (row) => truncate(row.delays) },
-                { header: 'Prepared By', accessor: (row) => row.preparedBy?.name || '-' },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <IconOnlyButton title="View" onClick={() => handleView(row)}>
-                        <Eye size={15} />
-                      </IconOnlyButton>
+            <IconActionButton
+              title="Download CSV"
+              onClick={exportCsv}
+              disabled={actionLoading}
+            >
+              <FileSpreadsheet size={16} /> CSV
+            </IconActionButton>
 
-                      <IconOnlyButton title="Edit" onClick={() => handleEdit(row)}>
-                        <Edit size={15} />
-                      </IconOnlyButton>
+            <IconActionButton
+              title="Download PDF"
+              onClick={exportPdf}
+              disabled={actionLoading}
+            >
+              <FileText size={16} /> PDF
+            </IconActionButton>
 
-                      <IconOnlyButton
-                        title="Delete"
-                        onClick={() => handleDelete(row.id)}
-                        color="#dc2626"
-                      >
-                        <Trash2 size={15} />
-                      </IconOnlyButton>
-                    </div>
-                  ),
-                },
-              ]}
-              data={filteredReports}
-              emptyMessage="No daily reports found"
-            />
+            <IconActionButton
+              title="Refresh"
+              onClick={handleRefresh}
+              disabled={actionLoading || !selectedProjectId}
+            >
+              <RefreshCcw size={16} /> Refresh
+            </IconActionButton>
           </div>
-        </Card>
-      </div>
 
-      {/* PDF EXPORT TEMPLATE - hidden from screen, used only for PDF */}
-      {/* <div id="daily-reports-pdf" style={pdfContainerStyle}>
-      <div style={pdfHeaderStyle}>
-        <h1 style={{ margin: 0 }}>Daily Site Report</h1>
-
-        <p style={{ margin: '6px 0 0' }}>
-          {selectedProject
-            ? `${selectedProject.code} - ${selectedProject.name}`
-            : 'Selected Project'}
-        </p>
-      </div>
-
-      {exportReports.map((report) => (
-        <div key={report.id} style={pdfReportCardStyle}>
-          <h2 style={pdfSectionTitleStyle}>
-            Report Date: {formatDate(report.reportDate)}
-          </h2>
-
-          <div style={pdfGridStyle}>
-            <PdfDetail
-              label="Project"
-              value={
-                report.project
-                  ? `${report.project.code} - ${report.project.name}`
-                  : selectedProject
-                    ? `${selectedProject.code} - ${selectedProject.name}`
-                    : '-'
+          <div className="module-grid">
+            <Card
+              title={
+                mode === 'edit'
+                  ? `Edit Daily Report: ${formatDate(editingReport?.reportDate)}`
+                  : 'Create Daily Report'
               }
-            />
+            >
+              <form onSubmit={handleSubmit} aria-busy={actionLoading}>
+                <SelectField
+                  label="Project"
+                  value={form.projectId}
+                  disabled={actionLoading}
+                  onChange={handleProjectChange}
+                >
+                  <option value={0}>Select project</option>
 
-            <PdfDetail label="Prepared By" value={report.preparedBy?.name || '-'} />
-            <PdfDetail label="Weather" value={report.weather || '-'} />
-            <PdfDetail label="Manpower" value={String(report.manpowerCount ?? 0)} />
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.code} - {project.name}
+                    </option>
+                  ))}
+                </SelectField>
+
+                <Input
+                  label="Report Date"
+                  type="date"
+                  value={form.reportDate}
+                  onChange={(event) =>
+                    updateField('reportDate', event.target.value)
+                  }
+                  required
+                />
+
+                <Input
+                  label="Weather"
+                  value={form.weather}
+                  onChange={(event) => updateField('weather', event.target.value)}
+                  placeholder="Sunny, cloudy, rainy..."
+                />
+
+                <Input
+                  label="Manpower Count"
+                  type="number"
+                  min={0}
+                  value={form.manpowerCount ?? 0}
+                  onChange={(event) =>
+                    updateField('manpowerCount', Number(event.target.value))
+                  }
+                />
+
+                <TextareaField
+                  label="Equipment Used"
+                  value={form.equipmentUsed ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('equipmentUsed', value)}
+                />
+
+                <TextareaField
+                  label="Work Completed"
+                  value={form.workCompleted ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('workCompleted', value)}
+                />
+
+                <TextareaField
+                  label="Material Received"
+                  value={form.materialReceived ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('materialReceived', value)}
+                />
+
+                <TextareaField
+                  label="Issues"
+                  value={form.issues ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('issues', value)}
+                />
+
+                <TextareaField
+                  label="Delays"
+                  value={form.delays ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('delays', value)}
+                />
+
+                <TextareaField
+                  label="Remarks"
+                  value={form.remarks ?? ''}
+                  disabled={actionLoading}
+                  onChange={(value) => updateField('remarks', value)}
+                />
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <Button disabled={actionLoading} style={{ flex: 1 }}>
+                    {actionLoading
+                      ? mode === 'edit'
+                        ? 'Saving...'
+                        : 'Creating...'
+                      : mode === 'edit'
+                        ? 'Save Changes'
+                        : 'Create Report'}
+                  </Button>
+
+                  {mode === 'edit' && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => resetForm()}
+                      disabled={actionLoading}
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+              </form>
+            </Card>
+
+            <Card title="Daily Report Register">
+              <div style={toolbarStyle}>
+                <Input
+                  label="Search"
+                  placeholder="Search weather, work, issues, delays..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+
+              <div id="daily-reports-printable">
+                <DataTable<DailyReport>
+                  columns={[
+                    {
+                      header: 'Date',
+                      accessor: (row) => formatDate(row.reportDate),
+                    },
+                    {
+                      header: 'Weather',
+                      accessor: (row) => row.weather || '-',
+                    },
+                    {
+                      header: 'Manpower',
+                      accessor: 'manpowerCount',
+                    },
+                    {
+                      header: 'Work Completed',
+                      accessor: (row) => truncate(row.workCompleted),
+                    },
+                    {
+                      header: 'Issues',
+                      accessor: (row) => truncate(row.issues),
+                    },
+                    {
+                      header: 'Delays',
+                      accessor: (row) => truncate(row.delays),
+                    },
+                    {
+                      header: 'Prepared By',
+                      accessor: (row) => row.preparedBy?.name || '-',
+                    },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <IconOnlyButton
+                            title="View"
+                            onClick={() => handleView(row)}
+                            disabled={actionLoading}
+                          >
+                            <Eye size={15} />
+                          </IconOnlyButton>
+
+                          <IconOnlyButton
+                            title="Edit"
+                            onClick={() => handleEdit(row)}
+                            disabled={actionLoading}
+                          >
+                            <Edit size={15} />
+                          </IconOnlyButton>
+
+                          <IconOnlyButton
+                            title="Delete"
+                            onClick={() => handleDelete(row.id)}
+                            disabled={actionLoading}
+                            color="#dc2626"
+                          >
+                            <Trash2 size={15} />
+                          </IconOnlyButton>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  data={filteredReports}
+                  emptyMessage={
+                    selectedProjectId
+                      ? 'No daily reports found'
+                      : 'Select a project to view daily reports'
+                  }
+                />
+              </div>
+            </Card>
           </div>
-
-          <PdfBlock label="Equipment Used" value={report.equipmentUsed} />
-          <PdfBlock label="Work Completed" value={report.workCompleted} />
-          <PdfBlock label="Material Received" value={report.materialReceived} />
-          <PdfBlock label="Issues" value={report.issues} />
-          <PdfBlock label="Delays" value={report.delays} />
-          <PdfBlock label="Remarks" value={report.remarks} />
-
-          <div style={pdfSignatureStyle}>
-            <div>Prepared By: ______________________</div>
-            <div>Reviewed By: ______________________</div>
-          </div>
-        </div>
-      ))}
-    </div> */}
+        </>
+      )}
 
       {selectedReport && (
         <DailyReportDetailsModal
@@ -892,104 +957,198 @@ export default function DailyReportsPage() {
   );
 }
 
-const exportOptionsStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '220px 220px',
-  gap: 12,
-  alignItems: 'end',
-  marginBottom: 12,
-};
+function DailyReportsLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'daily-reports-spin 0.8s linear infinite',
+            }}
+          />
 
-const pdfContainerStyle: React.CSSProperties = {
-  position: 'fixed',
-  left: 0,
-  top: 0,
-  width: 794,
-  minHeight: 1123,
-  background: '#fff',
-  color: '#111827',
-  padding: 32,
-  fontFamily: 'Arial, sans-serif',
-  zIndex: -1,
-  opacity: 1,
-  pointerEvents: 'none',
-};
+          <div>
+            <strong style={{ color: '#111827' }}>
+              Loading daily reports
+            </strong>
 
-const pdfHeaderStyle: React.CSSProperties = {
-  borderBottom: '2px solid #111827',
-  paddingBottom: 12,
-  marginBottom: 20,
-};
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving projects, daily report records, manpower, and site
+              activity information from the server. Please wait.
+            </p>
+          </div>
+        </div>
 
-const pdfReportCardStyle: React.CSSProperties = {
-  pageBreakAfter: 'always',
-  border: '1px solid #d1d5db',
-  padding: 18,
-  marginBottom: 24,
-};
+        <div style={summaryGridStyle}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} style={metricCardStyle}>
+              <Skeleton width="60%" height={13} />
+              <Skeleton width="40%" height={28} marginTop={12} />
+            </div>
+          ))}
+        </div>
 
-const pdfSectionTitleStyle: React.CSSProperties = {
-  fontSize: 18,
-  margin: '0 0 16px',
-};
+        <div style={actionBarStyle}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Skeleton key={index} width="110px" height={38} />
+          ))}
+        </div>
 
-const pdfGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 12,
-  marginBottom: 16,
-};
+        <div className="module-grid">
+          <div
+            style={{
+              minHeight: 620,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="180px" height={18} />
 
-const pdfBlockStyle: React.CSSProperties = {
-  borderTop: '1px solid #e5e7eb',
-  paddingTop: 10,
-  marginTop: 10,
-};
+            {Array.from({ length: 12 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={36}
+                marginTop={18}
+              />
+            ))}
+          </div>
 
-const pdfLabelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: '#374151',
-  marginBottom: 4,
-};
+          <div
+            style={{
+              minHeight: 620,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="190px" height={18} />
+            <Skeleton width="100%" height={38} marginTop={20} />
 
-const pdfValueStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 600,
-};
+            {Array.from({ length: 10 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={30}
+                marginTop={20}
+              />
+            ))}
+          </div>
+        </div>
 
-const pdfTextStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.5,
-  whiteSpace: 'pre-wrap',
-};
+        <style>
+          {`
+            @keyframes daily-reports-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
 
-const pdfSignatureStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 24,
-  marginTop: 28,
-  fontSize: 13,
-};
-function DailyReportDetailsModal({ report, onClose }: { report: DailyReport; onClose: () => void }) {
+            @keyframes daily-reports-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'daily-reports-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
+function DailyReportDetailsModal({
+  report,
+  onClose,
+}: {
+  report: DailyReport;
+  onClose: () => void;
+}) {
   return (
     <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>Daily Report - {formatDate(report.reportDate)}</h2>
+          <h2 style={{ margin: 0 }}>
+            Daily Report - {formatDate(report.reportDate)}
+          </h2>
+
           <Button type="button" variant="secondary" onClick={onClose}>
             <X size={15} /> Close
           </Button>
         </div>
 
         <div style={detailsGridStyle}>
-          <Detail label="Project" value={report.project ? `${report.project.code} - ${report.project.name}` : '-'} />
+          <Detail
+            label="Project"
+            value={
+              report.project
+                ? `${report.project.code} - ${report.project.name}`
+                : '-'
+            }
+          />
           <Detail label="Prepared By" value={report.preparedBy?.name || '-'} />
           <Detail label="Weather" value={report.weather || '-'} />
-          <Detail label="Manpower" value={String(report.manpowerCount ?? 0)} />
-          <Detail label="Equipment Used" value={report.equipmentUsed || '-'} wide />
-          <Detail label="Work Completed" value={report.workCompleted || '-'} wide />
-          <Detail label="Material Received" value={report.materialReceived || '-'} wide />
+          <Detail
+            label="Manpower"
+            value={String(report.manpowerCount ?? 0)}
+          />
+          <Detail
+            label="Equipment Used"
+            value={report.equipmentUsed || '-'}
+            wide
+          />
+          <Detail
+            label="Work Completed"
+            value={report.workCompleted || '-'}
+            wide
+          />
+          <Detail
+            label="Material Received"
+            value={report.materialReceived || '-'}
+            wide
+          />
           <Detail label="Issues" value={report.issues || '-'} wide />
           <Detail label="Delays" value={report.delays || '-'} wide />
           <Detail label="Remarks" value={report.remarks || '-'} wide />
@@ -999,7 +1158,13 @@ function DailyReportDetailsModal({ report, onClose }: { report: DailyReport; onC
   );
 }
 
-function Alert({ type, children }: { type: 'success' | 'error'; children: React.ReactNode }) {
+function Alert({
+  type,
+  children,
+}: {
+  type: 'success' | 'error';
+  children: React.ReactNode;
+}) {
   const success = type === 'success';
 
   return (
@@ -1029,9 +1194,29 @@ function MetricCard({ label, value }: { label: string; value: string | number })
   );
 }
 
-function IconActionButton({ children, title, onClick }: { children: React.ReactNode; title: string; onClick: () => void }) {
+function IconActionButton({
+  children,
+  title,
+  onClick,
+  disabled = false,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <button type="button" title={title} onClick={onClick} style={iconActionButtonStyle}>
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...iconActionButtonStyle,
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
       {children}
     </button>
   );
@@ -1042,55 +1227,131 @@ function IconOnlyButton({
   title,
   onClick,
   color,
+  disabled = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClick: () => void;
   color?: string;
+  disabled?: boolean;
 }) {
   return (
-    <button type="button" title={title} onClick={onClick} style={{ ...iconOnlyButtonStyle, color: color || '#334155' }}>
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...iconOnlyButtonStyle,
+        color: color || '#334155',
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
       {children}
     </button>
   );
 }
 
-function SelectField({ label, value, onChange, children }: { label: string; value: string | number; onChange: (value: string) => void; children: React.ReactNode }) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  children,
+  disabled = false,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>{label}</label>
-      <select value={value} onChange={(event) => onChange(event.target.value)} style={fieldStyle}>
+      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+        {label}
+      </label>
+
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        style={{
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+      >
         {children}
       </select>
     </div>
   );
 }
 
-function TextareaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextareaField({
+  label,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>{label}</label>
-      <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
+      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+        {label}
+      </label>
+
+      <textarea
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        rows={3}
+        style={{
+          ...fieldStyle,
+          resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
+      />
     </div>
   );
 }
 
-function Detail({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+function Detail({
+  label,
+  value,
+  wide,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
   return (
     <div style={{ gridColumn: wide ? '1 / -1' : undefined }}>
-      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>
+        {label}
+      </div>
       <div style={{ fontWeight: 600, whiteSpace: 'pre-wrap' }}>{value}</div>
     </div>
   );
 }
+
 function dateKey(value?: string | null) {
   if (!value) return '';
   return String(value).slice(0, 10);
 }
+
 function formatDate(value?: string | null) {
   if (!value) return '-';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '-';
+
   return new Intl.DateTimeFormat(undefined, {
     year: 'numeric',
     month: 'short',
@@ -1100,8 +1361,11 @@ function formatDate(value?: string | null) {
 
 function toDateInputValue(value?: string | null) {
   if (!value) return '';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '';
+
   return date.toISOString().slice(0, 10);
 }
 
@@ -1129,6 +1393,14 @@ const metricCardStyle: React.CSSProperties = {
   boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
 };
 
+const exportOptionsStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '220px 220px',
+  gap: 12,
+  alignItems: 'end',
+  marginBottom: 12,
+};
+
 const actionBarStyle: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'flex-end',
@@ -1146,7 +1418,6 @@ const fieldStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 8,
   border: '1px solid #d1d5db',
-  background: '#fff',
 };
 
 const iconActionButtonStyle: React.CSSProperties = {
@@ -1159,7 +1430,6 @@ const iconActionButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  cursor: 'pointer',
   fontWeight: 700,
 };
 
@@ -1172,7 +1442,6 @@ const iconOnlyButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  cursor: 'pointer',
 };
 
 const modalOverlayStyle: React.CSSProperties = {

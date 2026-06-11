@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+
 import { authApi } from '../../api/auth.api';
 import { Button, Input } from '../../components/ui';
 
@@ -13,8 +14,18 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (searchParams.get('session') === 'expired') {
+    const sessionStatus = searchParams.get('session');
+
+    if (sessionStatus === 'expired') {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('authUser');
       setMessage('Your session has expired. Please sign in again.');
+    }
+
+    if (sessionStatus === 'logout') {
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('authUser');
+      setMessage('You have been signed out successfully.');
     }
   }, [searchParams]);
 
@@ -23,18 +34,32 @@ export default function LoginPage() {
 
     if (loading) return;
 
+    if (!email.trim()) {
+      setMessage('Email is required');
+      return;
+    }
+
+    if (!password.trim()) {
+      setMessage('Password is required');
+      return;
+    }
+
     try {
       setLoading(true);
       setMessage('');
 
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('authUser');
+
       const data = await authApi.login({
-        email,
+        email: email.trim(),
         password,
       });
 
       localStorage.setItem('accessToken', data.accessToken);
 
       const profile = await authApi.me();
+
       localStorage.setItem('authUser', JSON.stringify(profile));
 
       navigate('/dashboard', {
@@ -44,7 +69,11 @@ export default function LoginPage() {
       localStorage.removeItem('accessToken');
       localStorage.removeItem('authUser');
 
-      setMessage(error.response?.data?.message || 'Invalid email or password');
+      setMessage(
+        error?.response?.data?.message ||
+          error?.message ||
+          'Invalid email or password',
+      );
     } finally {
       setLoading(false);
     }
@@ -53,10 +82,11 @@ export default function LoginPage() {
   return (
     <div className="auth-page">
       {loading && (
-        <div className="auth-loading-overlay">
+        <div className="auth-loading-overlay" role="status" aria-live="polite">
           <div className="auth-loading-card">
             <Spinner />
-            <p>Authenticating...</p>
+            <strong>Signing you in</strong>
+            <p>Verifying your credentials and loading your account.</p>
           </div>
         </div>
       )}
@@ -70,14 +100,26 @@ export default function LoginPage() {
         <h2>Sign in</h2>
         <p className="auth-muted">Access your project dashboard.</p>
 
-        {message && <div className="auth-error">{message}</div>}
+        {message && (
+          <div
+            className={
+              message.toLowerCase().includes('successfully')
+                ? 'auth-success'
+                : 'auth-error'
+            }
+            role="alert"
+          >
+            {message}
+          </div>
+        )}
 
-        <form onSubmit={handleLogin}>
+        <form onSubmit={handleLogin} aria-busy={loading}>
           <Input
             label="Email"
             type="email"
             value={email}
             disabled={loading}
+            autoComplete="email"
             onChange={(e) => setEmail(e.target.value)}
             required
           />
@@ -87,6 +129,7 @@ export default function LoginPage() {
             type="password"
             value={password}
             disabled={loading}
+            autoComplete="current-password"
             onChange={(e) => setPassword(e.target.value)}
             required
           />

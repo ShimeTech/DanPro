@@ -51,10 +51,12 @@ export default function NotificationsPage() {
   const [form, setForm] = useState(emptyForm);
   const [editing, setEditing] = useState<NotificationItem | null>(null);
   const [viewing, setViewing] = useState<NotificationItem | null>(null);
-  const [viewingContact, setViewingContact] = useState<ContactNotification | null>(null);
+  const [viewingContact, setViewingContact] =
+    useState<ContactNotification | null>(null);
 
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   const unreadCount = notifications.filter((item) => !item.isRead).length;
@@ -69,17 +71,18 @@ export default function NotificationsPage() {
 
   const filteredNotifications = useMemo(() => {
     const query = search.trim().toLowerCase();
+
     if (!query) return notifications;
 
     return notifications.filter((item) =>
-      [item.type, item.title, item.message, item.project?.name, item.project?.code].some(
-        (value) => String(value || '').toLowerCase().includes(query),
-      ),
+      [item.type, item.title, item.message, item.project?.name, item.project?.code]
+        .some((value) => String(value || '').toLowerCase().includes(query)),
     );
   }, [notifications, search]);
 
   const filteredContactInquiries = useMemo(() => {
     const query = search.trim().toLowerCase();
+
     if (!query) return contactInquiries;
 
     return contactInquiries.filter((item) =>
@@ -101,7 +104,7 @@ export default function NotificationsPage() {
 
   async function loadPage() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
 
       const [notificationData, contactData, projectData, userData] =
@@ -126,7 +129,7 @@ export default function NotificationsPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, 'Failed to load notifications'));
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
   }
 
@@ -140,13 +143,28 @@ export default function NotificationsPage() {
     setContactInquiries(contactData);
   }
 
+  async function handleRefresh() {
+    try {
+      setActionLoading(true);
+      setMessage('');
+
+      await loadNotificationsOnly();
+
+      setMessage('Notifications refreshed successfully');
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to refresh notifications'));
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function runAction(
     action: () => Promise<any>,
     success: string,
     fallback: string,
   ) {
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await action();
@@ -156,19 +174,34 @@ export default function NotificationsPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, fallback));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
   async function saveNotification(e: React.FormEvent) {
     e.preventDefault();
 
+    if (!form.userId) {
+      setMessage('User is required');
+      return;
+    }
+
+    if (!form.title.trim()) {
+      setMessage('Title is required');
+      return;
+    }
+
+    if (!form.message.trim()) {
+      setMessage('Message is required');
+      return;
+    }
+
     const payload = {
       userId: Number(form.userId),
       projectId: form.projectId ? Number(form.projectId) : null,
       type: form.type,
-      title: form.title,
-      message: form.message,
+      title: form.title.trim(),
+      message: form.message.trim(),
     };
 
     await runAction(
@@ -198,6 +231,8 @@ export default function NotificationsPage() {
       title: item.title,
       message: item.message,
     });
+
+    setMessage('');
   }
 
   function resetForm() {
@@ -207,6 +242,8 @@ export default function NotificationsPage() {
       ...emptyForm,
       userId: users[0]?.id ? String(users[0].id) : '',
     });
+
+    setMessage('');
   }
 
   async function markContactAsRead(id: number) {
@@ -234,312 +271,354 @@ export default function NotificationsPage() {
 
       {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      {loading && <p>Loading notifications...</p>}
-
-      <div className="module-grid">
-        <div className="module-sidebar">
-          <Card title={editing ? 'Edit Notification' : 'Create Notification'}>
-            <form onSubmit={saveNotification}>
-              <SelectField
-                label="User"
-                value={form.userId}
-                onChange={(value) => setForm({ ...form, userId: value })}
-              >
-                <option value="">Select user</option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name} - {user.email}
-                  </option>
-                ))}
-              </SelectField>
-
-              <SelectField
-                label="Project"
-                value={form.projectId}
-                onChange={(value) => setForm({ ...form, projectId: value })}
-              >
-                <option value="">No project</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.code} - {project.name}
-                  </option>
-                ))}
-              </SelectField>
-
-              <SelectField
-                label="Type"
-                value={form.type}
-                onChange={(value) => setForm({ ...form, type: value })}
-              >
-                {notificationTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </SelectField>
-
-              <Input
-                label="Title"
-                value={form.title}
-                onChange={(event) =>
-                  setForm({ ...form, title: event.target.value })
-                }
-                required
-              />
-
-              <TextareaField
-                label="Message"
-                value={form.message}
-                onChange={(value) => setForm({ ...form, message: value })}
-              />
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button disabled={loading || !form.userId} style={{ flex: 1 }}>
-                  {editing ? (
-                    <>
-                      <Save size={15} /> Save Changes
-                    </>
-                  ) : (
-                    <>
-                      <Bell size={15} /> Create Notification
-                    </>
-                  )}
-                </Button>
-
-                {editing && (
-                  <Button type="button" variant="secondary" onClick={resetForm}>
-                    <X size={15} /> Cancel
-                  </Button>
-                )}
-              </div>
-            </form>
-          </Card>
-
-          <Card title="Notification Summary">
-            <InfoItem label="System Total" value={String(notifications.length)} />
-            <InfoItem label="System Unread" value={String(unreadCount)} />
-            <InfoItem label="System Read" value={String(readCount)} />
-            <InfoItem
-              label="Contact Messages"
-              value={String(contactInquiries.length)}
-            />
-            <InfoItem
-              label="Unread Contacts"
-              value={String(contactUnreadCount)}
-            />
-            <InfoItem label="Read Contacts" value={String(contactReadCount)} />
-          </Card>
-
-          <Card title="Notification Types">
-            {notificationTypes.map((type) => (
-              <InfoItem
-                key={type}
-                label={type}
-                value={String(countType(notifications, type))}
-              />
-            ))}
-          </Card>
-        </div>
-
-        <div className="module-content">
-          <Card title="Search & Actions">
-            <div style={actionRowStyle}>
-              <Input
-                label="Search"
-                placeholder="Search notifications, contacts, title, email, project..."
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-
-              <IconActionButton title="Refresh" onClick={loadPage}>
-                <RefreshCcw size={16} /> Refresh
-              </IconActionButton>
-            </div>
-          </Card>
-
-          <Card title="Public Contact Inquiries">
-            {filteredContactInquiries.length === 0 && (
-              <p>No public contact inquiries found.</p>
-            )}
-
-            <div style={{ display: 'grid', gap: 12 }}>
-              {filteredContactInquiries.map((item) => (
-                <div
-                  key={item.id}
-                  style={{
-                    padding: 16,
-                    borderRadius: 12,
-                    border: item.isRead
-                      ? '1px solid #e5e7eb'
-                      : '2px solid #2563eb',
-                    background: item.isRead ? '#ffffff' : '#eff6ff',
-                  }}
+      {pageLoading ? (
+        <NotificationsLoading />
+      ) : (
+        <div className="module-grid">
+          <div className="module-sidebar">
+            <Card title={editing ? 'Edit Notification' : 'Create Notification'}>
+              <form onSubmit={saveNotification} aria-busy={actionLoading}>
+                <SelectField
+                  label="User"
+                  value={form.userId}
+                  disabled={actionLoading}
+                  onChange={(value) => setForm({ ...form, userId: value })}
                 >
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                    }}
+                  <option value="">Select user</option>
+
+                  {users.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name} - {user.email}
+                    </option>
+                  ))}
+                </SelectField>
+
+                <SelectField
+                  label="Project"
+                  value={form.projectId}
+                  disabled={actionLoading}
+                  onChange={(value) => setForm({ ...form, projectId: value })}
+                >
+                  <option value="">No project</option>
+
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.code} - {project.name}
+                    </option>
+                  ))}
+                </SelectField>
+
+                <SelectField
+                  label="Type"
+                  value={form.type}
+                  disabled={actionLoading}
+                  onChange={(value) => setForm({ ...form, type: value })}
+                >
+                  {notificationTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </SelectField>
+
+                <Input
+                  label="Title"
+                  value={form.title}
+                  onChange={(event) =>
+                    setForm({ ...form, title: event.target.value })
+                  }
+                  required
+                />
+
+                <TextareaField
+                  label="Message"
+                  value={form.message}
+                  disabled={actionLoading}
+                  onChange={(value) => setForm({ ...form, message: value })}
+                />
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button
+                    disabled={actionLoading || !form.userId}
+                    style={{ flex: 1 }}
                   >
-                    <div>
-                      <h3 style={{ margin: 0 }}>
-                        {item.subject || 'New Contact Inquiry'}
-                      </h3>
+                    {actionLoading ? (
+                      'Saving...'
+                    ) : editing ? (
+                      <>
+                        <Save size={15} /> Save Changes
+                      </>
+                    ) : (
+                      <>
+                        <Bell size={15} /> Create Notification
+                      </>
+                    )}
+                  </Button>
 
-                      <p style={{ margin: '6px 0', fontWeight: 600 }}>
-                        {item.name} — {item.email}
-                      </p>
-
-                      <p style={{ margin: '6px 0' }}>
-                        {item.phone || 'No phone'} |{' '}
-                        {item.company || 'No company'}
-                      </p>
-                    </div>
-
-                    <StatusBadge status={item.isRead ? 'READ' : 'UNREAD'} />
-                  </div>
-
-                  <p style={{ marginTop: 12 }}>{truncate(item.message, 140)}</p>
-
-                  <p style={{ color: '#64748b', fontSize: 13 }}>
-                    {formatDateTime(item.createdAt)}
-                  </p>
-
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {editing && (
                     <Button
                       type="button"
                       variant="secondary"
-                      onClick={() => setViewingContact(item)}
+                      onClick={resetForm}
+                      disabled={actionLoading}
                     >
-                      <Eye size={15} /> View
+                      <X size={15} /> Cancel
                     </Button>
+                  )}
+                </div>
+              </form>
+            </Card>
 
-                    {!item.isRead && (
+            <Card title="Notification Summary">
+              <InfoItem label="System Total" value={String(notifications.length)} />
+              <InfoItem label="System Unread" value={String(unreadCount)} />
+              <InfoItem label="System Read" value={String(readCount)} />
+              <InfoItem
+                label="Contact Messages"
+                value={String(contactInquiries.length)}
+              />
+              <InfoItem
+                label="Unread Contacts"
+                value={String(contactUnreadCount)}
+              />
+              <InfoItem label="Read Contacts" value={String(contactReadCount)} />
+            </Card>
+
+            <Card title="Notification Types">
+              {notificationTypes.map((type) => (
+                <InfoItem
+                  key={type}
+                  label={type}
+                  value={String(countType(notifications, type))}
+                />
+              ))}
+            </Card>
+          </div>
+
+          <div className="module-content">
+            <Card title="Search & Actions">
+              <div style={actionRowStyle}>
+                <Input
+                  label="Search"
+                  placeholder="Search notifications, contacts, title, email, project..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+
+                <IconActionButton
+                  title="Refresh"
+                  onClick={handleRefresh}
+                  disabled={actionLoading}
+                >
+                  <RefreshCcw size={16} /> Refresh
+                </IconActionButton>
+              </div>
+            </Card>
+
+            <Card title="Public Contact Inquiries">
+              {filteredContactInquiries.length === 0 && (
+                <p>No public contact inquiries found.</p>
+              )}
+
+              <div style={{ display: 'grid', gap: 12 }}>
+                {filteredContactInquiries.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      padding: 16,
+                      borderRadius: 12,
+                      border: item.isRead
+                        ? '1px solid #e5e7eb'
+                        : '2px solid #2563eb',
+                      background: item.isRead ? '#ffffff' : '#eff6ff',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <h3 style={{ margin: 0 }}>
+                          {item.subject || 'New Contact Inquiry'}
+                        </h3>
+
+                        <p style={{ margin: '6px 0', fontWeight: 600 }}>
+                          {item.name} — {item.email}
+                        </p>
+
+                        <p style={{ margin: '6px 0' }}>
+                          {item.phone || 'No phone'} |{' '}
+                          {item.company || 'No company'}
+                        </p>
+                      </div>
+
+                      <StatusBadge status={item.isRead ? 'READ' : 'UNREAD'} />
+                    </div>
+
+                    <p style={{ marginTop: 12 }}>{truncate(item.message, 140)}</p>
+
+                    <p style={{ color: '#64748b', fontSize: 13 }}>
+                      {formatDateTime(item.createdAt)}
+                    </p>
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <Button
                         type="button"
-                        onClick={() => markContactAsRead(item.id)}
+                        variant="secondary"
+                        disabled={actionLoading}
+                        onClick={() => setViewingContact(item)}
                       >
-                        <CheckCircle2 size={15} /> Mark as Read
+                        <Eye size={15} /> View
                       </Button>
-                    )}
-                    <Button
-  type="button"
-  variant="danger"
-  onClick={() =>
-    runAction(
-      () => contactApi.remove(item.id),
-      'Contact inquiry deleted successfully',
-      'Failed to delete contact inquiry',
-    )
-  }
->
-  <Trash2 size={15} /> Delete
-</Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
 
-          <Card title="System Notification List">
-            <DataTable<NotificationItem>
-              columns={[
-                {
-                  header: 'Date',
-                  accessor: (row) => formatDateTime(row.createdAt),
-                },
-                {
-                  header: 'Type',
-                  accessor: (row) => <StatusBadge status={row.type} />,
-                },
-                { header: 'Title', accessor: 'title' },
-                {
-                  header: 'Message',
-                  accessor: (row) => truncate(row.message),
-                },
-                {
-                  header: 'Project',
-                  accessor: (row) => row.project?.name || row.projectId || '-',
-                },
-                {
-                  header: 'Status',
-                  accessor: (row) => (
-                    <StatusBadge status={row.isRead ? 'READ' : 'UNREAD'} />
-                  ),
-                },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      <IconOnlyButton title="View" onClick={() => setViewing(row)}>
-                        <Eye size={15} />
-                      </IconOnlyButton>
-
-                      <IconOnlyButton title="Edit" onClick={() => editNotification(row)}>
-                        <Edit size={15} />
-                      </IconOnlyButton>
-
-                      {row.isRead ? (
-                        <IconOnlyButton
-                          title="Mark as unread"
-                          onClick={() =>
-                            runAction(
-                              () => notificationsApi.markAsUnread(row.id),
-                              'Notification marked as unread',
-                              'Failed to mark as unread',
-                            )
-                          }
+                      {!item.isRead && (
+                        <Button
+                          type="button"
+                          disabled={actionLoading}
+                          onClick={() => markContactAsRead(item.id)}
                         >
-                          <MailOpen size={15} />
-                        </IconOnlyButton>
-                      ) : (
-                        <IconOnlyButton
-                          title="Mark as read"
-                          color="#16a34a"
-                          onClick={() =>
-                            runAction(
-                              () => notificationsApi.markAsRead(row.id),
-                              'Notification marked as read',
-                              'Failed to mark as read',
-                            )
-                          }
-                        >
-                          <CheckCircle2 size={15} />
-                        </IconOnlyButton>
+                          <CheckCircle2 size={15} /> Mark as Read
+                        </Button>
                       )}
 
-                      <IconOnlyButton
-                        title="Delete"
-                        color="#dc2626"
+                      <Button
+                        type="button"
+                        variant="danger"
+                        disabled={actionLoading}
                         onClick={() =>
                           runAction(
-                            () => notificationsApi.remove(row.id),
-                            'Notification deleted successfully',
-                            'Failed to delete notification',
+                            () => contactApi.remove(item.id),
+                            'Contact inquiry deleted successfully',
+                            'Failed to delete contact inquiry',
                           )
                         }
                       >
-                        <Trash2 size={15} />
-                      </IconOnlyButton>
+                        <Trash2 size={15} /> Delete
+                      </Button>
                     </div>
-                  ),
-                },
-              ]}
-              data={filteredNotifications}
-              emptyMessage="No notifications found"
-            />
-          </Card>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card title="System Notification List">
+              <DataTable<NotificationItem>
+                columns={[
+                  {
+                    header: 'Date',
+                    accessor: (row) => formatDateTime(row.createdAt),
+                  },
+                  {
+                    header: 'Type',
+                    accessor: (row) => <StatusBadge status={row.type} />,
+                  },
+                  { header: 'Title', accessor: 'title' },
+                  {
+                    header: 'Message',
+                    accessor: (row) => truncate(row.message),
+                  },
+                  {
+                    header: 'Project',
+                    accessor: (row) => row.project?.name || row.projectId || '-',
+                  },
+                  {
+                    header: 'Status',
+                    accessor: (row) => (
+                      <StatusBadge status={row.isRead ? 'READ' : 'UNREAD'} />
+                    ),
+                  },
+                  {
+                    header: 'Actions',
+                    accessor: (row) => (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <IconOnlyButton
+                          title="View"
+                          disabled={actionLoading}
+                          onClick={() => setViewing(row)}
+                        >
+                          <Eye size={15} />
+                        </IconOnlyButton>
+
+                        <IconOnlyButton
+                          title="Edit"
+                          disabled={actionLoading}
+                          onClick={() => editNotification(row)}
+                        >
+                          <Edit size={15} />
+                        </IconOnlyButton>
+
+                        {row.isRead ? (
+                          <IconOnlyButton
+                            title="Mark as unread"
+                            disabled={actionLoading}
+                            onClick={() =>
+                              runAction(
+                                () => notificationsApi.markAsUnread(row.id),
+                                'Notification marked as unread',
+                                'Failed to mark as unread',
+                              )
+                            }
+                          >
+                            <MailOpen size={15} />
+                          </IconOnlyButton>
+                        ) : (
+                          <IconOnlyButton
+                            title="Mark as read"
+                            color="#16a34a"
+                            disabled={actionLoading}
+                            onClick={() =>
+                              runAction(
+                                () => notificationsApi.markAsRead(row.id),
+                                'Notification marked as read',
+                                'Failed to mark as read',
+                              )
+                            }
+                          >
+                            <CheckCircle2 size={15} />
+                          </IconOnlyButton>
+                        )}
+
+                        <IconOnlyButton
+                          title="Delete"
+                          color="#dc2626"
+                          disabled={actionLoading}
+                          onClick={() =>
+                            runAction(
+                              () => notificationsApi.remove(row.id),
+                              'Notification deleted successfully',
+                              'Failed to delete notification',
+                            )
+                          }
+                        >
+                          <Trash2 size={15} />
+                        </IconOnlyButton>
+                      </div>
+                    ),
+                  },
+                ]}
+                data={filteredNotifications}
+                emptyMessage="No notifications found"
+              />
+            </Card>
+          </div>
         </div>
-      </div>
+      )}
 
       {viewing && (
-        <NotificationModal item={viewing} onClose={() => setViewing(null)} />
+        <NotificationModal
+          item={viewing}
+          actionLoading={actionLoading}
+          onClose={() => setViewing(null)}
+        />
       )}
 
       {viewingContact && (
         <ContactModal
           item={viewingContact}
+          actionLoading={actionLoading}
           onClose={() => setViewingContact(null)}
           onMarkAsRead={() => markContactAsRead(viewingContact.id)}
         />
@@ -548,20 +627,166 @@ export default function NotificationsPage() {
   );
 }
 
+function NotificationsLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'notifications-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>Loading notifications</strong>
+
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving system notifications, users, projects, public contact
+              inquiries, unread counts, and alert summaries from the server.
+            </p>
+          </div>
+        </div>
+
+        <div className="module-grid">
+          <div className="module-sidebar">
+            {Array.from({ length: 3 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: cardIndex === 0 ? 430 : 240,
+                  padding: 18,
+                  marginBottom: 16,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="170px" height={18} />
+
+                {Array.from({ length: cardIndex === 0 ? 8 : 6 }).map(
+                  (_, index) => (
+                    <Skeleton
+                      key={index}
+                      width="100%"
+                      height={32}
+                      marginTop={18}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gap: 20 }}>
+            {Array.from({ length: 3 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: cardIndex === 0 ? 120 : 300,
+                  padding: 18,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="210px" height={18} />
+
+                {Array.from({ length: cardIndex === 0 ? 2 : 7 }).map(
+                  (_, index) => (
+                    <Skeleton
+                      key={index}
+                      width="100%"
+                      height={30}
+                      marginTop={20}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @keyframes notifications-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes notifications-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'notifications-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 function NotificationModal({
   item,
   onClose,
+  actionLoading,
 }: {
   item: NotificationItem;
   onClose: () => void;
+  actionLoading: boolean;
 }) {
   return (
-    <div style={modalOverlayStyle}>
+    <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
           <h2 style={{ margin: 0 }}>{item.title}</h2>
 
-          <Button type="button" variant="secondary" onClick={onClose}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={actionLoading}
+          >
             <X size={15} /> Close
           </Button>
         </div>
@@ -571,7 +796,9 @@ function NotificationModal({
           <Detail label="Status" value={item.isRead ? 'Read' : 'Unread'} />
           <Detail
             label="Project"
-            value={item.project ? `${item.project.code} - ${item.project.name}` : '-'}
+            value={
+              item.project ? `${item.project.code} - ${item.project.name}` : '-'
+            }
           />
           <Detail label="Created" value={formatDateTime(item.createdAt)} />
           <Detail label="Read At" value={formatDateTime(item.readAt)} />
@@ -586,20 +813,25 @@ function ContactModal({
   item,
   onClose,
   onMarkAsRead,
+  actionLoading,
 }: {
   item: ContactNotification;
   onClose: () => void;
   onMarkAsRead: () => void;
+  actionLoading: boolean;
 }) {
   return (
-    <div style={modalOverlayStyle}>
+    <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>
-            {item.subject || 'New Contact Inquiry'}
-          </h2>
+          <h2 style={{ margin: 0 }}>{item.subject || 'New Contact Inquiry'}</h2>
 
-          <Button type="button" variant="secondary" onClick={onClose}>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={actionLoading}
+          >
             <X size={15} /> Close
           </Button>
         </div>
@@ -617,7 +849,11 @@ function ContactModal({
 
         {!item.isRead && (
           <div style={{ marginTop: 20 }}>
-            <Button type="button" onClick={onMarkAsRead}>
+            <Button
+              type="button"
+              onClick={onMarkAsRead}
+              disabled={actionLoading}
+            >
               <CheckCircle2 size={15} /> Mark as Read
             </Button>
           </div>
@@ -656,6 +892,7 @@ function Alert({
 
   return (
     <div
+      role="alert"
       style={{
         marginBottom: 16,
         padding: 12,
@@ -676,11 +913,13 @@ function SelectField({
   value,
   onChange,
   children,
+  disabled = false,
 }: {
   label: string;
   value: string | number;
   onChange: (value: string) => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -690,8 +929,13 @@ function SelectField({
 
       <select
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        style={fieldStyle}
+        style={{
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
       >
         {children}
       </select>
@@ -703,10 +947,12 @@ function TextareaField({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -716,9 +962,15 @@ function TextareaField({
 
       <textarea
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         rows={4}
-        style={{ ...fieldStyle, resize: 'vertical' }}
+        style={{
+          ...fieldStyle,
+          resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
         required
       />
     </div>
@@ -729,17 +981,24 @@ function IconActionButton({
   children,
   title,
   onClick,
+  disabled = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      style={iconActionButtonStyle}
+      disabled={disabled}
+      style={{
+        ...iconActionButtonStyle,
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
     >
       {children}
     </button>
@@ -751,18 +1010,26 @@ function IconOnlyButton({
   title,
   onClick,
   color,
+  disabled = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClick: () => void;
   color?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      style={{ ...iconOnlyButtonStyle, color: color || '#334155' }}
+      disabled={disabled}
+      style={{
+        ...iconOnlyButtonStyle,
+        color: color || '#334155',
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
     >
       {children}
     </button>
@@ -787,6 +1054,7 @@ function Detail({
       <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>
         {label}
       </div>
+
       <div style={{ fontWeight: 600, whiteSpace: 'pre-wrap' }}>
         {value || '-'}
       </div>
@@ -810,6 +1078,7 @@ function formatDateTime(value?: string | null) {
 
 function truncate(value?: string | null, length = 70) {
   if (!value) return '-';
+
   return value.length > length ? `${value.slice(0, length)}...` : value;
 }
 
@@ -822,7 +1091,6 @@ const fieldStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 8,
   border: '1px solid #d1d5db',
-  background: '#fff',
 };
 
 const actionRowStyle: React.CSSProperties = {
@@ -842,7 +1110,6 @@ const iconActionButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  cursor: 'pointer',
   fontWeight: 700,
 };
 
@@ -855,7 +1122,6 @@ const iconOnlyButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  cursor: 'pointer',
 };
 
 const modalOverlayStyle: React.CSSProperties = {

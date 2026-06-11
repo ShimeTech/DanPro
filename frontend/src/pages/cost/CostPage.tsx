@@ -10,6 +10,7 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+
 import { costApi } from '../../api/cost.api';
 import type {
   BoqItem,
@@ -23,6 +24,7 @@ import type { Project } from '../../api/projects.api';
 import { Button, Card, DataTable, Input, PageHeader } from '../../components/ui';
 
 type CostTab = 'boq' | 'budget' | 'expense' | 'variation';
+
 type ViewRecord =
   | { type: 'BOQ Item'; data: BoqItem }
   | { type: 'Budget'; data: Budget }
@@ -75,17 +77,21 @@ export default function CostPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [variations, setVariations] = useState<Variation[]>([]);
   const [summary, setSummary] = useState<CostSummary | null>(null);
+
   const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
   const [activeTab, setActiveTab] = useState<CostTab>('boq');
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
   const [viewRecord, setViewRecord] = useState<ViewRecord>(null);
+
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   const [editingBoq, setEditingBoq] = useState<BoqItem | null>(null);
   const [editingBudget, setEditingBudget] = useState<Budget | null>(null);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
-  const [editingVariation, setEditingVariation] = useState<Variation | null>(null);
+  const [editingVariation, setEditingVariation] =
+    useState<Variation | null>(null);
 
   const [boqForm, setBoqForm] = useState(emptyBoqForm);
   const [budgetForm, setBudgetForm] = useState(emptyBudgetForm);
@@ -110,7 +116,8 @@ export default function CostPage() {
   );
 
   const filteredExpenses = useMemo(
-    () => filterRecords(expenses, search, ['code', 'description', 'type', 'paidTo']),
+    () =>
+      filterRecords(expenses, search, ['code', 'description', 'type', 'paidTo']),
     [expenses, search],
   );
 
@@ -120,27 +127,53 @@ export default function CostPage() {
   );
 
   useEffect(() => {
-    loadProjects();
+    loadInitialData();
   }, []);
 
-  async function loadProjects() {
+  async function loadInitialData() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
-      const data = await projectsApi.findAll();
-      setProjects(data);
 
-      if (data.length > 0) {
-        await handleProjectChange(String(data[0].id));
+      const projectData = await projectsApi.findAll();
+      setProjects(projectData);
+
+      if (projectData.length > 0) {
+        const firstProjectId = projectData[0].id;
+
+        setSelectedProjectId(firstProjectId);
+
+        setBoqForm({ ...emptyBoqForm, projectId: firstProjectId });
+        setBudgetForm({ ...emptyBudgetForm, projectId: firstProjectId });
+        setExpenseForm({ ...emptyExpenseForm, projectId: firstProjectId });
+        setVariationForm({ ...emptyVariationForm, projectId: firstProjectId });
+
+        await loadCost(firstProjectId);
+      } else {
+        setSelectedProjectId('');
+        clearCostData();
       }
     } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load projects'));
+      setMessage(getErrorMessage(error, 'Failed to load cost data'));
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
   }
 
+  function clearCostData() {
+    setBoqItems([]);
+    setBudgets([]);
+    setExpenses([]);
+    setVariations([]);
+    setSummary(null);
+  }
+
   async function loadCost(projectId: number) {
+    if (!projectId) {
+      clearCostData();
+      return;
+    }
+
     const [boqData, budgetData, expenseData, variationData, summaryData] =
       await Promise.all([
         costApi.findBoqItems(projectId),
@@ -158,85 +191,153 @@ export default function CostPage() {
   }
 
   async function handleProjectChange(value: string) {
-    const projectId = Number(value);
-    setSelectedProjectId(projectId || '');
-
-    setBoqForm((prev) => ({ ...prev, projectId }));
-    setBudgetForm((prev) => ({ ...prev, projectId }));
-    setExpenseForm((prev) => ({ ...prev, projectId }));
-    setVariationForm((prev) => ({ ...prev, projectId }));
-
-    if (!projectId) return;
-
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
-      await loadCost(projectId);
+
+      const projectId = Number(value);
+
+      setSelectedProjectId(projectId || '');
+
+      setBoqForm({ ...emptyBoqForm, projectId });
+      setBudgetForm({ ...emptyBudgetForm, projectId });
+      setExpenseForm({ ...emptyExpenseForm, projectId });
+      setVariationForm({ ...emptyVariationForm, projectId });
+
+      resetEditingOnly();
+
+      if (projectId) {
+        await loadCost(projectId);
+      } else {
+        clearCostData();
+      }
     } catch (error: any) {
       setMessage(getErrorMessage(error, 'Failed to load cost data'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
-  function resetForms() {
+  function resetEditingOnly() {
     setEditingBoq(null);
     setEditingBudget(null);
     setEditingExpense(null);
     setEditingVariation(null);
-
-    setBoqForm({ ...emptyBoqForm, projectId: Number(selectedProjectId || 0) });
-    setBudgetForm({ ...emptyBudgetForm, projectId: Number(selectedProjectId || 0) });
-    setExpenseForm({ ...emptyExpenseForm, projectId: Number(selectedProjectId || 0) });
-    setVariationForm({ ...emptyVariationForm, projectId: Number(selectedProjectId || 0) });
   }
 
-  async function runAction(action: () => Promise<any>, success: string, fallback: string) {
+  function resetForms() {
+    resetEditingOnly();
+
+    setBoqForm({ ...emptyBoqForm, projectId: Number(selectedProjectId || 0) });
+    setBudgetForm({
+      ...emptyBudgetForm,
+      projectId: Number(selectedProjectId || 0),
+    });
+    setExpenseForm({
+      ...emptyExpenseForm,
+      projectId: Number(selectedProjectId || 0),
+    });
+    setVariationForm({
+      ...emptyVariationForm,
+      projectId: Number(selectedProjectId || 0),
+    });
+
+    setMessage('');
+  }
+
+  async function runAction(
+    action: () => Promise<any>,
+    success: string,
+    fallback: string,
+  ) {
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
+
       await action();
       setMessage(success);
-      if (selectedProjectId) await loadCost(Number(selectedProjectId));
+
+      if (selectedProjectId) {
+        await loadCost(Number(selectedProjectId));
+      }
     } catch (error: any) {
       setMessage(getErrorMessage(error, fallback));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
+  }
+
+  async function handleRefresh() {
+    if (!selectedProjectId) return;
+
+    await runAction(
+      () => loadCost(Number(selectedProjectId)),
+      'Cost data refreshed successfully',
+      'Failed to refresh cost data',
+    );
   }
 
   async function saveBoqItem(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!boqForm.projectId) return setMessage('Project is required');
+    if (!boqForm.code.trim()) return setMessage('BOQ code is required');
+    if (!boqForm.description.trim()) {
+      return setMessage('BOQ description is required');
+    }
+    if (!boqForm.unit.trim()) return setMessage('Unit is required');
+
     const payload = {
       ...boqForm,
       projectId: Number(boqForm.projectId),
+      code: boqForm.code.trim().toUpperCase(),
+      description: boqForm.description.trim(),
+      unit: boqForm.unit.trim(),
       quantity: Number(boqForm.quantity),
       unitRate: Number(boqForm.unitRate),
     };
 
     await runAction(
       async () => {
-        if (editingBoq) await costApi.updateBoqItem(editingBoq.id, payload);
-        else await costApi.createBoqItem(payload);
+        if (editingBoq) {
+          await costApi.updateBoqItem(editingBoq.id, payload);
+        } else {
+          await costApi.createBoqItem(payload);
+        }
+
         resetForms();
       },
-      editingBoq ? 'BOQ item updated successfully' : 'BOQ item created successfully',
+      editingBoq
+        ? 'BOQ item updated successfully'
+        : 'BOQ item created successfully',
       editingBoq ? 'Failed to update BOQ item' : 'Failed to create BOQ item',
     );
   }
 
   async function saveBudget(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!budgetForm.projectId) return setMessage('Project is required');
+    if (!budgetForm.code.trim()) return setMessage('Budget code is required');
+    if (!budgetForm.title.trim()) return setMessage('Budget title is required');
+
     const payload = {
       ...budgetForm,
       projectId: Number(budgetForm.projectId),
+      code: budgetForm.code.trim().toUpperCase(),
+      title: budgetForm.title.trim(),
+      description: budgetForm.description.trim(),
       amount: Number(budgetForm.amount),
     };
 
     await runAction(
       async () => {
-        if (editingBudget) await costApi.updateBudget(editingBudget.id, payload);
-        else await costApi.createBudget(payload);
+        if (editingBudget) {
+          await costApi.updateBudget(editingBudget.id, payload);
+        } else {
+          await costApi.createBudget(payload);
+        }
+
         resetForms();
       },
       editingBudget ? 'Budget updated successfully' : 'Budget created successfully',
@@ -246,45 +347,84 @@ export default function CostPage() {
 
   async function saveExpense(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!expenseForm.projectId) return setMessage('Project is required');
+    if (!expenseForm.code.trim()) return setMessage('Expense code is required');
+    if (!expenseForm.description.trim()) {
+      return setMessage('Expense description is required');
+    }
+    if (!expenseForm.expenseDate) return setMessage('Expense date is required');
+
     const payload = {
       ...expenseForm,
       projectId: Number(expenseForm.projectId),
+      code: expenseForm.code.trim().toUpperCase(),
+      description: expenseForm.description.trim(),
       amount: Number(expenseForm.amount),
+      reference: expenseForm.reference.trim(),
+      paidTo: expenseForm.paidTo.trim(),
     };
 
     await runAction(
       async () => {
-        if (editingExpense) await costApi.updateExpense(editingExpense.id, payload);
-        else await costApi.createExpense(payload);
+        if (editingExpense) {
+          await costApi.updateExpense(editingExpense.id, payload);
+        } else {
+          await costApi.createExpense(payload);
+        }
+
         resetForms();
       },
-      editingExpense ? 'Expense updated successfully' : 'Expense created successfully',
+      editingExpense
+        ? 'Expense updated successfully'
+        : 'Expense created successfully',
       editingExpense ? 'Failed to update expense' : 'Failed to create expense',
     );
   }
 
   async function saveVariation(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!variationForm.projectId) return setMessage('Project is required');
+    if (!variationForm.code.trim()) {
+      return setMessage('Variation code is required');
+    }
+    if (!variationForm.title.trim()) {
+      return setMessage('Variation title is required');
+    }
+
     const payload = {
       ...variationForm,
       projectId: Number(variationForm.projectId),
+      code: variationForm.code.trim().toUpperCase(),
+      title: variationForm.title.trim(),
+      description: variationForm.description.trim(),
       amount: Number(variationForm.amount),
     };
 
     await runAction(
       async () => {
-        if (editingVariation) await costApi.updateVariation(editingVariation.id, payload);
-        else await costApi.createVariation(payload);
+        if (editingVariation) {
+          await costApi.updateVariation(editingVariation.id, payload);
+        } else {
+          await costApi.createVariation(payload);
+        }
+
         resetForms();
       },
-      editingVariation ? 'Variation updated successfully' : 'Variation created successfully',
-      editingVariation ? 'Failed to update variation' : 'Failed to create variation',
+      editingVariation
+        ? 'Variation updated successfully'
+        : 'Variation created successfully',
+      editingVariation
+        ? 'Failed to update variation'
+        : 'Failed to create variation',
     );
   }
 
   function editBoqItem(row: BoqItem) {
     setActiveTab('boq');
     setEditingBoq(row);
+
     setBoqForm({
       projectId: row.projectId,
       code: row.code,
@@ -293,11 +433,14 @@ export default function CostPage() {
       quantity: Number(row.quantity),
       unitRate: Number(row.unitRate),
     });
+
+    setMessage('');
   }
 
   function editBudget(row: Budget) {
     setActiveTab('budget');
     setEditingBudget(row);
+
     setBudgetForm({
       projectId: row.projectId,
       code: row.code,
@@ -306,11 +449,14 @@ export default function CostPage() {
       amount: Number(row.amount),
       status: row.status || 'DRAFT',
     });
+
+    setMessage('');
   }
 
   function editExpense(row: Expense) {
     setActiveTab('expense');
     setEditingExpense(row);
+
     setExpenseForm({
       projectId: row.projectId,
       code: row.code,
@@ -321,11 +467,14 @@ export default function CostPage() {
       reference: row.reference || '',
       paidTo: row.paidTo || '',
     });
+
+    setMessage('');
   }
 
   function editVariation(row: Variation) {
     setActiveTab('variation');
     setEditingVariation(row);
+
     setVariationForm({
       projectId: row.projectId,
       code: row.code,
@@ -334,6 +483,8 @@ export default function CostPage() {
       amount: Number(row.amount),
       status: row.status || 'DRAFT',
     });
+
+    setMessage('');
   }
 
   return (
@@ -343,268 +494,804 @@ export default function CostPage() {
         description="Manage BOQ, budgets, expenses, variations, and cost performance."
       />
 
-      <SelectField label="Project" value={selectedProjectId} onChange={handleProjectChange}>
-        <option value="">Select project</option>
-        {projects.map((project) => (
-          <option key={project.id} value={project.id}>
-            {project.code} - {project.name}
-          </option>
-        ))}
-      </SelectField>
-
       {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      <div style={summaryGridStyle}>
-        <SummaryCard title="BOQ Total" value={summary?.boqTotal ?? 0} />
-        <SummaryCard title="Budget Total" value={summary?.budgetTotal ?? 0} />
-        <SummaryCard title="Approved Variations" value={summary?.approvedVariationTotal ?? 0} />
-        <SummaryCard title="Revised Budget" value={summary?.revisedBudget ?? 0} />
-        <SummaryCard title="Actual Cost" value={summary?.actualCost ?? 0} />
-        <SummaryCard title="Remaining Budget" value={summary?.remainingBudget ?? 0} />
-        <SummaryCard title="Cost Performance" value={`${summary?.costPerformancePercent ?? 0}%`} plain />
-      </div>
+      {pageLoading ? (
+        <CostLoading />
+      ) : (
+        <>
+          <SelectField
+            label="Project"
+            value={selectedProjectId}
+            disabled={actionLoading}
+            onChange={handleProjectChange}
+          >
+            <option value="">Select project</option>
 
-      <div style={actionBarStyle}>
-        <IconActionButton
-          title="Refresh"
-          onClick={() =>
-            selectedProjectId &&
-            runAction(
-              () => loadCost(Number(selectedProjectId)),
-              'Cost data refreshed successfully',
-              'Failed to refresh cost data',
-            )
-          }
-        >
-          <RefreshCcw size={16} /> Refresh
-        </IconActionButton>
-      </div>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.code} - {project.name}
+              </option>
+            ))}
+          </SelectField>
 
-      <div className="module-grid">
-        <div className="module-sidebar">
-          <Card title="Cost Entry Forms">
-            <div style={tabStyle}>
-              <TabButton active={activeTab === 'boq'} onClick={() => setActiveTab('boq')}>
-                BOQ
-              </TabButton>
-              <TabButton active={activeTab === 'budget'} onClick={() => setActiveTab('budget')}>
-                Budget
-              </TabButton>
-              <TabButton active={activeTab === 'expense'} onClick={() => setActiveTab('expense')}>
-                Expense
-              </TabButton>
-              <TabButton active={activeTab === 'variation'} onClick={() => setActiveTab('variation')}>
-                Variation
-              </TabButton>
+          <div style={summaryGridStyle}>
+            <SummaryCard title="BOQ Total" value={summary?.boqTotal ?? 0} />
+            <SummaryCard title="Budget Total" value={summary?.budgetTotal ?? 0} />
+            <SummaryCard
+              title="Approved Variations"
+              value={summary?.approvedVariationTotal ?? 0}
+            />
+            <SummaryCard
+              title="Revised Budget"
+              value={summary?.revisedBudget ?? 0}
+            />
+            <SummaryCard title="Actual Cost" value={summary?.actualCost ?? 0} />
+            <SummaryCard
+              title="Remaining Budget"
+              value={summary?.remainingBudget ?? 0}
+            />
+            <SummaryCard
+              title="Cost Performance"
+              value={`${summary?.costPerformancePercent ?? 0}%`}
+              plain
+            />
+          </div>
+
+          <div style={actionBarStyle}>
+            <IconActionButton
+              title="Refresh"
+              onClick={handleRefresh}
+              disabled={actionLoading || !selectedProjectId}
+            >
+              <RefreshCcw size={16} /> Refresh
+            </IconActionButton>
+          </div>
+
+          <div className="module-grid">
+            <div className="module-sidebar">
+              <Card title="Cost Entry Forms">
+                <div style={tabStyle}>
+                  <TabButton
+                    active={activeTab === 'boq'}
+                    disabled={actionLoading}
+                    onClick={() => setActiveTab('boq')}
+                  >
+                    BOQ
+                  </TabButton>
+
+                  <TabButton
+                    active={activeTab === 'budget'}
+                    disabled={actionLoading}
+                    onClick={() => setActiveTab('budget')}
+                  >
+                    Budget
+                  </TabButton>
+
+                  <TabButton
+                    active={activeTab === 'expense'}
+                    disabled={actionLoading}
+                    onClick={() => setActiveTab('expense')}
+                  >
+                    Expense
+                  </TabButton>
+
+                  <TabButton
+                    active={activeTab === 'variation'}
+                    disabled={actionLoading}
+                    onClick={() => setActiveTab('variation')}
+                  >
+                    Variation
+                  </TabButton>
+                </div>
+
+                {activeTab === 'boq' && (
+                  <form onSubmit={saveBoqItem} aria-busy={actionLoading}>
+                    <Input
+                      label="BOQ Code"
+                      value={boqForm.code}
+                      onChange={(e) =>
+                        setBoqForm({ ...boqForm, code: e.target.value })
+                      }
+                      required
+                    />
+
+                    <TextareaField
+                      label="Description"
+                      value={boqForm.description}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setBoqForm({ ...boqForm, description: value })
+                      }
+                    />
+
+                    <Input
+                      label="Unit"
+                      value={boqForm.unit}
+                      onChange={(e) =>
+                        setBoqForm({ ...boqForm, unit: e.target.value })
+                      }
+                      required
+                    />
+
+                    <Input
+                      label="Quantity"
+                      type="number"
+                      value={boqForm.quantity}
+                      onChange={(e) =>
+                        setBoqForm({
+                          ...boqForm,
+                          quantity: Number(e.target.value),
+                        })
+                      }
+                    />
+
+                    <Input
+                      label="Unit Rate"
+                      type="number"
+                      value={boqForm.unitRate}
+                      onChange={(e) =>
+                        setBoqForm({
+                          ...boqForm,
+                          unitRate: Number(e.target.value),
+                        })
+                      }
+                    />
+
+                    <FormButtons
+                      loading={actionLoading}
+                      editing={Boolean(editingBoq)}
+                      onCancel={resetForms}
+                      label="BOQ Item"
+                    />
+                  </form>
+                )}
+
+                {activeTab === 'budget' && (
+                  <form onSubmit={saveBudget} aria-busy={actionLoading}>
+                    <Input
+                      label="Budget Code"
+                      value={budgetForm.code}
+                      onChange={(e) =>
+                        setBudgetForm({
+                          ...budgetForm,
+                          code: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <Input
+                      label="Title"
+                      value={budgetForm.title}
+                      onChange={(e) =>
+                        setBudgetForm({
+                          ...budgetForm,
+                          title: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <TextareaField
+                      label="Description"
+                      value={budgetForm.description}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setBudgetForm({
+                          ...budgetForm,
+                          description: value,
+                        })
+                      }
+                    />
+
+                    <Input
+                      label="Amount"
+                      type="number"
+                      value={budgetForm.amount}
+                      onChange={(e) =>
+                        setBudgetForm({
+                          ...budgetForm,
+                          amount: Number(e.target.value),
+                        })
+                      }
+                    />
+
+                    <SelectField
+                      label="Status"
+                      value={budgetForm.status}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setBudgetForm({ ...budgetForm, status: value })
+                      }
+                    >
+                      <option value="DRAFT">Draft</option>
+                      <option value="APPROVED">Approved</option>
+                      <option value="REJECTED">Rejected</option>
+                      <option value="CANCELLED">Cancelled</option>
+                    </SelectField>
+
+                    <FormButtons
+                      loading={actionLoading}
+                      editing={Boolean(editingBudget)}
+                      onCancel={resetForms}
+                      label="Budget"
+                    />
+                  </form>
+                )}
+
+                {activeTab === 'expense' && (
+                  <form onSubmit={saveExpense} aria-busy={actionLoading}>
+                    <Input
+                      label="Expense Code"
+                      value={expenseForm.code}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          code: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <TextareaField
+                      label="Description"
+                      value={expenseForm.description}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          description: value,
+                        })
+                      }
+                    />
+
+                    <SelectField
+                      label="Type"
+                      value={expenseForm.type}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setExpenseForm({ ...expenseForm, type: value })
+                      }
+                    >
+                      <option value="MATERIAL">Material</option>
+                      <option value="LABOR">Labor</option>
+                      <option value="EQUIPMENT">Equipment</option>
+                      <option value="SUBCONTRACTOR">Subcontractor</option>
+                      <option value="GENERAL">General</option>
+                      <option value="OTHER">Other</option>
+                    </SelectField>
+
+                    <Input
+                      label="Amount"
+                      type="number"
+                      value={expenseForm.amount}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          amount: Number(e.target.value),
+                        })
+                      }
+                    />
+
+                    <Input
+                      label="Expense Date"
+                      type="date"
+                      value={expenseForm.expenseDate}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          expenseDate: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <Input
+                      label="Reference"
+                      value={expenseForm.reference}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          reference: e.target.value,
+                        })
+                      }
+                    />
+
+                    <Input
+                      label="Paid To"
+                      value={expenseForm.paidTo}
+                      onChange={(e) =>
+                        setExpenseForm({
+                          ...expenseForm,
+                          paidTo: e.target.value,
+                        })
+                      }
+                    />
+
+                    <FormButtons
+                      loading={actionLoading}
+                      editing={Boolean(editingExpense)}
+                      onCancel={resetForms}
+                      label="Expense"
+                    />
+                  </form>
+                )}
+
+                {activeTab === 'variation' && (
+                  <form onSubmit={saveVariation} aria-busy={actionLoading}>
+                    <Input
+                      label="Variation Code"
+                      value={variationForm.code}
+                      onChange={(e) =>
+                        setVariationForm({
+                          ...variationForm,
+                          code: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <Input
+                      label="Title"
+                      value={variationForm.title}
+                      onChange={(e) =>
+                        setVariationForm({
+                          ...variationForm,
+                          title: e.target.value,
+                        })
+                      }
+                      required
+                    />
+
+                    <TextareaField
+                      label="Description"
+                      value={variationForm.description}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setVariationForm({
+                          ...variationForm,
+                          description: value,
+                        })
+                      }
+                    />
+
+                    <Input
+                      label="Amount"
+                      type="number"
+                      value={variationForm.amount}
+                      onChange={(e) =>
+                        setVariationForm({
+                          ...variationForm,
+                          amount: Number(e.target.value),
+                        })
+                      }
+                    />
+
+                    <SelectField
+                      label="Status"
+                      value={variationForm.status}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        setVariationForm({
+                          ...variationForm,
+                          status: value,
+                        })
+                      }
+                    >
+                      <option value="DRAFT">Draft</option>
+                      <option value="SUBMITTED">Submitted</option>
+                      <option value="APPROVED">Approved</option>
+                      <option value="REJECTED">Rejected</option>
+                    </SelectField>
+
+                    <FormButtons
+                      loading={actionLoading}
+                      editing={Boolean(editingVariation)}
+                      onCancel={resetForms}
+                      label="Variation"
+                    />
+                  </form>
+                )}
+              </Card>
             </div>
 
-            {activeTab === 'boq' && (
-              <form onSubmit={saveBoqItem}>
-                <Input label="BOQ Code" value={boqForm.code} onChange={(e) => setBoqForm({ ...boqForm, code: e.target.value })} required />
-                <TextareaField label="Description" value={boqForm.description} onChange={(value) => setBoqForm({ ...boqForm, description: value })} />
-                <Input label="Unit" value={boqForm.unit} onChange={(e) => setBoqForm({ ...boqForm, unit: e.target.value })} required />
-                <Input label="Quantity" type="number" value={boqForm.quantity} onChange={(e) => setBoqForm({ ...boqForm, quantity: Number(e.target.value) })} />
-                <Input label="Unit Rate" type="number" value={boqForm.unitRate} onChange={(e) => setBoqForm({ ...boqForm, unitRate: Number(e.target.value) })} />
-                <FormButtons loading={loading} editing={Boolean(editingBoq)} onCancel={resetForms} label="BOQ Item" />
-              </form>
-            )}
+            <div style={{ display: 'grid', gap: 20 }}>
+              <Card title="Cost Register">
+                <Input
+                  label="Search"
+                  placeholder="Search BOQ, budgets, expenses, variations..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </Card>
 
-            {activeTab === 'budget' && (
-              <form onSubmit={saveBudget}>
-                <Input label="Budget Code" value={budgetForm.code} onChange={(e) => setBudgetForm({ ...budgetForm, code: e.target.value })} required />
-                <Input label="Title" value={budgetForm.title} onChange={(e) => setBudgetForm({ ...budgetForm, title: e.target.value })} required />
-                <TextareaField label="Description" value={budgetForm.description} onChange={(value) => setBudgetForm({ ...budgetForm, description: value })} />
-                <Input label="Amount" type="number" value={budgetForm.amount} onChange={(e) => setBudgetForm({ ...budgetForm, amount: Number(e.target.value) })} />
-                <SelectField label="Status" value={budgetForm.status} onChange={(value) => setBudgetForm({ ...budgetForm, status: value })}>
-                  <option value="DRAFT">Draft</option>
-                  <option value="APPROVED">Approved</option>
-                  <option value="REJECTED">Rejected</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </SelectField>
-                <FormButtons loading={loading} editing={Boolean(editingBudget)} onCancel={resetForms} label="Budget" />
-              </form>
-            )}
+              <Card title="BOQ Items">
+                <DataTable<BoqItem>
+                  columns={[
+                    { header: 'Code', accessor: 'code' },
+                    {
+                      header: 'Description',
+                      accessor: (row) => truncate(row.description),
+                    },
+                    { header: 'Unit', accessor: 'unit' },
+                    { header: 'Qty', accessor: (row) => number(row.quantity) },
+                    { header: 'Rate', accessor: (row) => money(row.unitRate) },
+                    { header: 'Total', accessor: (row) => money(row.totalAmount) },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <Actions
+                          loading={actionLoading}
+                          onView={() =>
+                            setViewRecord({ type: 'BOQ Item', data: row })
+                          }
+                          onEdit={() => editBoqItem(row)}
+                          onDelete={() =>
+                            runAction(
+                              () => costApi.removeBoqItem(row.id),
+                              'BOQ item deleted successfully',
+                              'Failed to delete BOQ item',
+                            )
+                          }
+                        />
+                      ),
+                    },
+                  ]}
+                  data={filteredBoqItems}
+                  emptyMessage="No BOQ items found"
+                />
+              </Card>
 
-            {activeTab === 'expense' && (
-              <form onSubmit={saveExpense}>
-                <Input label="Expense Code" value={expenseForm.code} onChange={(e) => setExpenseForm({ ...expenseForm, code: e.target.value })} required />
-                <TextareaField label="Description" value={expenseForm.description} onChange={(value) => setExpenseForm({ ...expenseForm, description: value })} />
-                <SelectField label="Type" value={expenseForm.type} onChange={(value) => setExpenseForm({ ...expenseForm, type: value })}>
-                  <option value="MATERIAL">Material</option>
-                  <option value="LABOR">Labor</option>
-                  <option value="EQUIPMENT">Equipment</option>
-                  <option value="SUBCONTRACTOR">Subcontractor</option>
-                  <option value="GENERAL">General</option>
-                  <option value="OTHER">Other</option>
-                </SelectField>
-                <Input label="Amount" type="number" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: Number(e.target.value) })} />
-                <Input label="Expense Date" type="date" value={expenseForm.expenseDate} onChange={(e) => setExpenseForm({ ...expenseForm, expenseDate: e.target.value })} required />
-                <Input label="Reference" value={expenseForm.reference} onChange={(e) => setExpenseForm({ ...expenseForm, reference: e.target.value })} />
-                <Input label="Paid To" value={expenseForm.paidTo} onChange={(e) => setExpenseForm({ ...expenseForm, paidTo: e.target.value })} />
-                <FormButtons loading={loading} editing={Boolean(editingExpense)} onCancel={resetForms} label="Expense" />
-              </form>
-            )}
+              <Card title="Budgets">
+                <DataTable<Budget>
+                  columns={[
+                    { header: 'Code', accessor: 'code' },
+                    { header: 'Title', accessor: 'title' },
+                    {
+                      header: 'Status',
+                      accessor: (row) => <StatusBadge status={row.status} />,
+                    },
+                    { header: 'Amount', accessor: (row) => money(row.amount) },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <Actions
+                          loading={actionLoading}
+                          onView={() =>
+                            setViewRecord({ type: 'Budget', data: row })
+                          }
+                          onEdit={() => editBudget(row)}
+                          onDelete={() =>
+                            runAction(
+                              () => costApi.removeBudget(row.id),
+                              'Budget deleted successfully',
+                              'Failed to delete budget',
+                            )
+                          }
+                          extra={
+                            row.status === 'DRAFT' ? (
+                              <>
+                                <IconOnlyButton
+                                  title="Approve"
+                                  color="#16a34a"
+                                  disabled={actionLoading}
+                                  onClick={() =>
+                                    runAction(
+                                      () => costApi.approveBudget(row.id),
+                                      'Budget approved successfully',
+                                      'Failed to approve budget',
+                                    )
+                                  }
+                                >
+                                  <CheckCircle2 size={15} />
+                                </IconOnlyButton>
 
-            {activeTab === 'variation' && (
-              <form onSubmit={saveVariation}>
-                <Input label="Variation Code" value={variationForm.code} onChange={(e) => setVariationForm({ ...variationForm, code: e.target.value })} required />
-                <Input label="Title" value={variationForm.title} onChange={(e) => setVariationForm({ ...variationForm, title: e.target.value })} required />
-                <TextareaField label="Description" value={variationForm.description} onChange={(value) => setVariationForm({ ...variationForm, description: value })} />
-                <Input label="Amount" type="number" value={variationForm.amount} onChange={(e) => setVariationForm({ ...variationForm, amount: Number(e.target.value) })} />
-                <SelectField label="Status" value={variationForm.status} onChange={(value) => setVariationForm({ ...variationForm, status: value })}>
-                  <option value="DRAFT">Draft</option>
-                  <option value="SUBMITTED">Submitted</option>
-                  <option value="APPROVED">Approved</option>
-                  <option value="REJECTED">Rejected</option>
-                </SelectField>
-                <FormButtons loading={loading} editing={Boolean(editingVariation)} onCancel={resetForms} label="Variation" />
-              </form>
-            )}
-          </Card>
-        </div>
+                                <IconOnlyButton
+                                  title="Reject"
+                                  color="#dc2626"
+                                  disabled={actionLoading}
+                                  onClick={() =>
+                                    runAction(
+                                      () => costApi.rejectBudget(row.id),
+                                      'Budget rejected successfully',
+                                      'Failed to reject budget',
+                                    )
+                                  }
+                                >
+                                  <XCircle size={15} />
+                                </IconOnlyButton>
+                              </>
+                            ) : null
+                          }
+                        />
+                      ),
+                    },
+                  ]}
+                  data={filteredBudgets}
+                  emptyMessage="No budgets found"
+                />
+              </Card>
 
-        <div style={{ display: 'grid', gap: 20 }}>
-          <Card title="Cost Register">
-            <Input label="Search" placeholder="Search BOQ, budgets, expenses, variations..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          </Card>
+              <Card title="Expenses">
+                <DataTable<Expense>
+                  columns={[
+                    { header: 'Code', accessor: 'code' },
+                    {
+                      header: 'Type',
+                      accessor: (row) => <StatusBadge status={row.type} />,
+                    },
+                    { header: 'Amount', accessor: (row) => money(row.amount) },
+                    {
+                      header: 'Date',
+                      accessor: (row) => formatDate(row.expenseDate),
+                    },
+                    {
+                      header: 'Paid To',
+                      accessor: (row) => row.paidTo || '-',
+                    },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <Actions
+                          loading={actionLoading}
+                          onView={() =>
+                            setViewRecord({ type: 'Expense', data: row })
+                          }
+                          onEdit={() => editExpense(row)}
+                          onDelete={() =>
+                            runAction(
+                              () => costApi.removeExpense(row.id),
+                              'Expense deleted successfully',
+                              'Failed to delete expense',
+                            )
+                          }
+                        />
+                      ),
+                    },
+                  ]}
+                  data={filteredExpenses}
+                  emptyMessage="No expenses found"
+                />
+              </Card>
 
-          <Card title="BOQ Items">
-            <DataTable<BoqItem>
-              columns={[
-                { header: 'Code', accessor: 'code' },
-                { header: 'Description', accessor: (row) => truncate(row.description) },
-                { header: 'Unit', accessor: 'unit' },
-                { header: 'Qty', accessor: (row) => number(row.quantity) },
-                { header: 'Rate', accessor: (row) => money(row.unitRate) },
-                { header: 'Total', accessor: (row) => money(row.totalAmount) },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <Actions
-                      onView={() => setViewRecord({ type: 'BOQ Item', data: row })}
-                      onEdit={() => editBoqItem(row)}
-                      onDelete={() => runAction(() => costApi.removeBoqItem(row.id), 'BOQ item deleted successfully', 'Failed to delete BOQ item')}
-                    />
-                  ),
-                },
-              ]}
-              data={filteredBoqItems}
-              emptyMessage="No BOQ items found"
-            />
-          </Card>
+              <Card title="Variations">
+                <DataTable<Variation>
+                  columns={[
+                    { header: 'Code', accessor: 'code' },
+                    { header: 'Title', accessor: 'title' },
+                    {
+                      header: 'Status',
+                      accessor: (row) => <StatusBadge status={row.status} />,
+                    },
+                    { header: 'Amount', accessor: (row) => money(row.amount) },
+                    {
+                      header: 'Approved At',
+                      accessor: (row) => formatDate(row.approvedAt),
+                    },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <Actions
+                          loading={actionLoading}
+                          onView={() =>
+                            setViewRecord({ type: 'Variation', data: row })
+                          }
+                          onEdit={() => editVariation(row)}
+                          onDelete={() =>
+                            runAction(
+                              () => costApi.removeVariation(row.id),
+                              'Variation deleted successfully',
+                              'Failed to delete variation',
+                            )
+                          }
+                          extra={
+                            row.status === 'DRAFT' ? (
+                              <IconOnlyButton
+                                title="Submit"
+                                color="#2563eb"
+                                disabled={actionLoading}
+                                onClick={() =>
+                                  runAction(
+                                    () => costApi.submitVariation(row.id),
+                                    'Variation submitted successfully',
+                                    'Failed to submit variation',
+                                  )
+                                }
+                              >
+                                <Send size={15} />
+                              </IconOnlyButton>
+                            ) : row.status === 'SUBMITTED' ? (
+                              <>
+                                <IconOnlyButton
+                                  title="Approve"
+                                  color="#16a34a"
+                                  disabled={actionLoading}
+                                  onClick={() =>
+                                    runAction(
+                                      () => costApi.approveVariation(row.id),
+                                      'Variation approved successfully',
+                                      'Failed to approve variation',
+                                    )
+                                  }
+                                >
+                                  <CheckCircle2 size={15} />
+                                </IconOnlyButton>
 
-          <Card title="Budgets">
-            <DataTable<Budget>
-              columns={[
-                { header: 'Code', accessor: 'code' },
-                { header: 'Title', accessor: 'title' },
-                { header: 'Status', accessor: (row) => <StatusBadge status={row.status} /> },
-                { header: 'Amount', accessor: (row) => money(row.amount) },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <Actions
-                      onView={() => setViewRecord({ type: 'Budget', data: row })}
-                      onEdit={() => editBudget(row)}
-                      onDelete={() => runAction(() => costApi.removeBudget(row.id), 'Budget deleted successfully', 'Failed to delete budget')}
-                      extra={
-                        row.status === 'DRAFT' ? (
-                          <>
-                            <IconOnlyButton title="Approve" color="#16a34a" onClick={() => runAction(() => costApi.approveBudget(row.id), 'Budget approved successfully', 'Failed to approve budget')}>
-                              <CheckCircle2 size={15} />
-                            </IconOnlyButton>
-                            <IconOnlyButton title="Reject" color="#dc2626" onClick={() => runAction(() => costApi.rejectBudget(row.id), 'Budget rejected successfully', 'Failed to reject budget')}>
-                              <XCircle size={15} />
-                            </IconOnlyButton>
-                          </>
-                        ) : null
-                      }
-                    />
-                  ),
-                },
-              ]}
-              data={filteredBudgets}
-              emptyMessage="No budgets found"
-            />
-          </Card>
+                                <IconOnlyButton
+                                  title="Reject"
+                                  color="#dc2626"
+                                  disabled={actionLoading}
+                                  onClick={() =>
+                                    runAction(
+                                      () => costApi.rejectVariation(row.id),
+                                      'Variation rejected successfully',
+                                      'Failed to reject variation',
+                                    )
+                                  }
+                                >
+                                  <XCircle size={15} />
+                                </IconOnlyButton>
+                              </>
+                            ) : null
+                          }
+                        />
+                      ),
+                    },
+                  ]}
+                  data={filteredVariations}
+                  emptyMessage="No variations found"
+                />
+              </Card>
+            </div>
+          </div>
+        </>
+      )}
 
-          <Card title="Expenses">
-            <DataTable<Expense>
-              columns={[
-                { header: 'Code', accessor: 'code' },
-                { header: 'Type', accessor: (row) => <StatusBadge status={row.type} /> },
-                { header: 'Amount', accessor: (row) => money(row.amount) },
-                { header: 'Date', accessor: (row) => formatDate(row.expenseDate) },
-                { header: 'Paid To', accessor: (row) => row.paidTo || '-' },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <Actions
-                      onView={() => setViewRecord({ type: 'Expense', data: row })}
-                      onEdit={() => editExpense(row)}
-                      onDelete={() => runAction(() => costApi.removeExpense(row.id), 'Expense deleted successfully', 'Failed to delete expense')}
-                    />
-                  ),
-                },
-              ]}
-              data={filteredExpenses}
-              emptyMessage="No expenses found"
-            />
-          </Card>
-
-          <Card title="Variations">
-            <DataTable<Variation>
-              columns={[
-                { header: 'Code', accessor: 'code' },
-                { header: 'Title', accessor: 'title' },
-                { header: 'Status', accessor: (row) => <StatusBadge status={row.status} /> },
-                { header: 'Amount', accessor: (row) => money(row.amount) },
-                { header: 'Approved At', accessor: (row) => formatDate(row.approvedAt) },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <Actions
-                      onView={() => setViewRecord({ type: 'Variation', data: row })}
-                      onEdit={() => editVariation(row)}
-                      onDelete={() => runAction(() => costApi.removeVariation(row.id), 'Variation deleted successfully', 'Failed to delete variation')}
-                      extra={
-                        row.status === 'DRAFT' ? (
-                          <IconOnlyButton title="Submit" color="#2563eb" onClick={() => runAction(() => costApi.submitVariation(row.id), 'Variation submitted successfully', 'Failed to submit variation')}>
-                            <Send size={15} />
-                          </IconOnlyButton>
-                        ) : row.status === 'SUBMITTED' ? (
-                          <>
-                            <IconOnlyButton title="Approve" color="#16a34a" onClick={() => runAction(() => costApi.approveVariation(row.id), 'Variation approved successfully', 'Failed to approve variation')}>
-                              <CheckCircle2 size={15} />
-                            </IconOnlyButton>
-                            <IconOnlyButton title="Reject" color="#dc2626" onClick={() => runAction(() => costApi.rejectVariation(row.id), 'Variation rejected successfully', 'Failed to reject variation')}>
-                              <XCircle size={15} />
-                            </IconOnlyButton>
-                          </>
-                        ) : null
-                      }
-                    />
-                  ),
-                },
-              ]}
-              data={filteredVariations}
-              emptyMessage="No variations found"
-            />
-          </Card>
-        </div>
-      </div>
-
-      {viewRecord && <DetailsModal record={viewRecord} onClose={() => setViewRecord(null)} />}
+      {viewRecord && (
+        <DetailsModal
+          record={viewRecord}
+          onClose={() => setViewRecord(null)}
+          actionLoading={actionLoading}
+        />
+      )}
     </div>
   );
 }
 
+function CostLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'cost-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>Loading cost records</strong>
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving BOQ items, budgets, expenses, variations, and cost
+              performance summary from the server. Please wait.
+            </p>
+          </div>
+        </div>
+
+        <Skeleton width="260px" height={38} marginTop={8} />
+
+        <div style={summaryGridStyle}>
+          {Array.from({ length: 7 }).map((_, index) => (
+            <div key={index} style={summarySkeletonCardStyle}>
+              <Skeleton width="60%" height={13} />
+              <Skeleton width="45%" height={28} marginTop={12} />
+            </div>
+          ))}
+        </div>
+
+        <div style={actionBarStyle}>
+          <Skeleton width="110px" height={38} />
+        </div>
+
+        <div className="module-grid">
+          <div className="module-sidebar">
+            <div style={loadingPanelStyle}>
+              <Skeleton width="170px" height={18} />
+              {Array.from({ length: 9 }).map((_, index) => (
+                <Skeleton key={index} width="100%" height={36} marginTop={18} />
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gap: 20 }}>
+            {Array.from({ length: 5 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: cardIndex === 0 ? 120 : 260,
+                  padding: 18,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="170px" height={18} />
+                {Array.from({ length: cardIndex === 0 ? 1 : 5 }).map(
+                  (_, index) => (
+                    <Skeleton
+                      key={index}
+                      width="100%"
+                      height={30}
+                      marginTop={20}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @keyframes cost-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes cost-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'cost-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 function Actions({
+  loading,
   onView,
   onEdit,
   onDelete,
   extra,
 }: {
+  loading: boolean;
   onView: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -612,10 +1299,24 @@ function Actions({
 }) {
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-      <IconOnlyButton title="View" onClick={onView}><Eye size={15} /></IconOnlyButton>
-      <IconOnlyButton title="Edit" onClick={onEdit}><Edit size={15} /></IconOnlyButton>
+      <IconOnlyButton title="View" onClick={onView} disabled={loading}>
+        <Eye size={15} />
+      </IconOnlyButton>
+
+      <IconOnlyButton title="Edit" onClick={onEdit} disabled={loading}>
+        <Edit size={15} />
+      </IconOnlyButton>
+
       {extra}
-      <IconOnlyButton title="Delete" onClick={onDelete} color="#dc2626"><Trash2 size={15} /></IconOnlyButton>
+
+      <IconOnlyButton
+        title="Delete"
+        onClick={onDelete}
+        color="#dc2626"
+        disabled={loading}
+      >
+        <Trash2 size={15} />
+      </IconOnlyButton>
     </div>
   );
 }
@@ -634,10 +1335,24 @@ function FormButtons({
   return (
     <div style={{ display: 'flex', gap: 8 }}>
       <Button disabled={loading} style={{ flex: 1 }}>
-        {loading ? 'Saving...' : editing ? <><Save size={15} /> Save Changes</> : `Create ${label}`}
+        {loading ? (
+          'Saving...'
+        ) : editing ? (
+          <>
+            <Save size={15} /> Save Changes
+          </>
+        ) : (
+          `Create ${label}`
+        )}
       </Button>
+
       {editing && (
-        <Button type="button" variant="secondary" onClick={onCancel}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={onCancel}
+          disabled={loading}
+        >
           <X size={15} /> Cancel
         </Button>
       )}
@@ -645,15 +1360,33 @@ function FormButtons({
   );
 }
 
-function DetailsModal({ record, onClose }: { record: Exclude<ViewRecord, null>; onClose: () => void }) {
+function DetailsModal({
+  record,
+  onClose,
+  actionLoading,
+}: {
+  record: Exclude<ViewRecord, null>;
+  onClose: () => void;
+  actionLoading: boolean;
+}) {
   const data: any = record.data;
 
   return (
     <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>{record.type}: {data.code}</h2>
-          <Button type="button" variant="secondary" onClick={onClose}><X size={15} /> Close</Button>
+          <h2 style={{ margin: 0 }}>
+            {record.type}: {data.code}
+          </h2>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={actionLoading}
+          >
+            <X size={15} /> Close
+          </Button>
         </div>
 
         <div style={detailsGridStyle}>
@@ -661,7 +1394,10 @@ function DetailsModal({ record, onClose }: { record: Exclude<ViewRecord, null>; 
           <Detail label="Title" value={data.title || '-'} />
           <Detail label="Status / Type" value={data.status || data.type || '-'} />
           <Detail label="Amount" value={money(data.amount || data.totalAmount)} />
-          <Detail label="Date" value={formatDate(data.expenseDate || data.approvedAt || data.createdAt)} />
+          <Detail
+            label="Date"
+            value={formatDate(data.expenseDate || data.approvedAt || data.createdAt)}
+          />
           <Detail label="Reference" value={data.reference || '-'} />
           <Detail label="Description" value={data.description || '-'} wide />
         </div>
@@ -670,19 +1406,37 @@ function DetailsModal({ record, onClose }: { record: Exclude<ViewRecord, null>; 
   );
 }
 
-function SummaryCard({ title, value, plain }: { title: string; value: number | string; plain?: boolean }) {
+function SummaryCard({
+  title,
+  value,
+  plain,
+}: {
+  title: string;
+  value: number | string;
+  plain?: boolean;
+}) {
   return (
     <Card>
       <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>{title}</p>
-      <h3 style={{ margin: '8px 0 0' }}>{plain ? value : typeof value === 'number' ? money(value) : value}</h3>
+      <h3 style={{ margin: '8px 0 0' }}>
+        {plain ? value : typeof value === 'number' ? money(value) : value}
+      </h3>
     </Card>
   );
 }
 
-function Alert({ type, children }: { type: 'success' | 'error'; children: React.ReactNode }) {
+function Alert({
+  type,
+  children,
+}: {
+  type: 'success' | 'error';
+  children: React.ReactNode;
+}) {
   const success = type === 'success';
+
   return (
     <div
+      role="alert"
       style={{
         marginBottom: 16,
         padding: 12,
@@ -698,44 +1452,178 @@ function Alert({ type, children }: { type: 'success' | 'error'; children: React.
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" onClick={onClick} style={tabButtonStyle(active)}>{children}</button>;
+function TabButton({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        ...tabButtonStyle(active),
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
-function IconActionButton({ children, title, onClick }: { children: React.ReactNode; title: string; onClick: () => void }) {
-  return <button type="button" title={title} onClick={onClick} style={iconActionButtonStyle}>{children}</button>;
+function IconActionButton({
+  children,
+  title,
+  onClick,
+  disabled = false,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...iconActionButtonStyle,
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
-function IconOnlyButton({ children, title, onClick, color }: { children: React.ReactNode; title: string; onClick: () => void; color?: string }) {
-  return <button type="button" title={title} onClick={onClick} style={{ ...iconOnlyButtonStyle, color: color || '#334155' }}>{children}</button>;
+function IconOnlyButton({
+  children,
+  title,
+  onClick,
+  color,
+  disabled = false,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  color?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...iconOnlyButtonStyle,
+        color: color || '#334155',
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
 }
 
 function StatusBadge({ status }: { status?: string }) {
   return <span style={badgeStyle(status || '-')}>{status || '-'}</span>;
 }
 
-function SelectField({ label, value, onChange, children }: { label: string; value: string | number; onChange: (value: string) => void; children: React.ReactNode }) {
+function SelectField({
+  label,
+  value,
+  onChange,
+  children,
+  disabled = false,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} style={fieldStyle}>{children}</select>
+      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+        {label}
+      </label>
+
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {children}
+      </select>
     </div>
   );
 }
 
-function TextareaField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextareaField({
+  label,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>{label}</label>
-      <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3} style={{ ...fieldStyle, resize: 'vertical' }} />
+      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+        {label}
+      </label>
+
+      <textarea
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        rows={3}
+        style={{
+          ...fieldStyle,
+          resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
+      />
     </div>
   );
 }
 
-function Detail({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+function Detail({
+  label,
+  value,
+  wide,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
   return (
     <div style={{ gridColumn: wide ? '1 / -1' : undefined }}>
-      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>
+        {label}
+      </div>
       <div style={{ fontWeight: 600, whiteSpace: 'pre-wrap' }}>{value}</div>
     </div>
   );
@@ -743,37 +1631,67 @@ function Detail({ label, value, wide }: { label: string; value: string; wide?: b
 
 function money(value?: string | number | null) {
   if (value === null || value === undefined || value === '') return '-';
-  return Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return Number(value).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function number(value?: string | number | null) {
   if (value === null || value === undefined || value === '') return '-';
-  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  return Number(value).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatDate(value?: string | null) {
   if (!value) return '-';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleDateString();
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  }).format(date);
 }
 
 function toDateInput(value?: string | null) {
   if (!value) return '';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '';
+
   return date.toISOString().slice(0, 10);
 }
 
 function truncate(value?: string | null) {
   if (!value) return '-';
+
   return value.length > 50 ? `${value.slice(0, 50)}...` : value;
 }
 
-function filterRecords<T extends Record<string, any>>(records: T[], keyword: string, fields: string[]) {
+function filterRecords<T extends Record<string, any>>(
+  records: T[],
+  keyword: string,
+  fields: string[],
+) {
   const query = keyword.trim().toLowerCase();
+
   if (!query) return records;
-  return records.filter((record) => fields.some((field) => String(record[field] || '').toLowerCase().includes(query)));
+
+  return records.filter((record) =>
+    fields.some((field) =>
+      String(record[field] || '')
+        .toLowerCase()
+        .includes(query),
+    ),
+  );
 }
 
 function getErrorMessage(error: any, fallback: string) {
@@ -785,6 +1703,21 @@ const summaryGridStyle: React.CSSProperties = {
   gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
   gap: 16,
   marginBottom: 20,
+};
+
+const summarySkeletonCardStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 12,
+  padding: 16,
+};
+
+const loadingPanelStyle: React.CSSProperties = {
+  minHeight: 560,
+  padding: 18,
+  borderRadius: 14,
+  background: '#ffffff',
+  border: '1px solid #e5e7eb',
 };
 
 const actionBarStyle: React.CSSProperties = {
@@ -806,7 +1739,6 @@ const fieldStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 8,
   border: '1px solid #d1d5db',
-  background: '#fff',
 };
 
 const iconActionButtonStyle: React.CSSProperties = {
@@ -819,7 +1751,6 @@ const iconActionButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  cursor: 'pointer',
   fontWeight: 700,
 };
 
@@ -832,7 +1763,6 @@ const iconOnlyButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  cursor: 'pointer',
 };
 
 const modalOverlayStyle: React.CSSProperties = {
@@ -870,7 +1800,6 @@ function tabButtonStyle(active: boolean): React.CSSProperties {
     border: '1px solid #dbe3ef',
     background: active ? '#2563eb' : '#fff',
     color: active ? '#fff' : '#1e293b',
-    cursor: 'pointer',
     fontWeight: 700,
   };
 }

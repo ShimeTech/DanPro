@@ -59,15 +59,21 @@ export default function SubmittalsPage() {
   const [submittals, setSubmittals] = useState<Submittal[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
   const [selectedSubmittalId, setSelectedSubmittalId] = useState<number | ''>('');
-  const [selectedSubmittal, setSelectedSubmittal] = useState<Submittal | null>(null);
-  const [editingSubmittal, setEditingSubmittal] = useState<Submittal | null>(null);
-  const [reviewStatus, setReviewStatus] = useState<SubmittalStatus>('APPROVED');
+  const [selectedSubmittal, setSelectedSubmittal] =
+    useState<Submittal | null>(null);
+  const [editingSubmittal, setEditingSubmittal] =
+    useState<Submittal | null>(null);
+
+  const [reviewStatus, setReviewStatus] =
+    useState<SubmittalStatus>('APPROVED');
   const [reviewComments, setReviewComments] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
+
   const [form, setForm] = useState<CreateSubmittalPayload>(emptyForm);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [message, setMessage] = useState('');
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === Number(selectedProjectId)),
@@ -101,24 +107,43 @@ export default function SubmittalsPage() {
   const isSuccess = message.toLowerCase().includes('successfully');
 
   useEffect(() => {
-    loadProjects();
+    loadInitialData();
   }, []);
 
-  async function loadProjects() {
+  async function loadInitialData() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
 
-      const data = await projectsApi.findAll();
-      setProjects(data);
+      const projectData = await projectsApi.findAll();
+      setProjects(projectData);
 
-      if (data.length > 0) {
-        await handleProjectChange(String(data[0].id));
+      if (projectData.length > 0) {
+        const firstProjectId = projectData[0].id;
+
+        setSelectedProjectId(firstProjectId);
+        setForm({
+          ...emptyForm,
+          projectId: firstProjectId,
+          documentId: undefined,
+        });
+
+        const [submittalData, documentData] = await Promise.all([
+          submittalsApi.findByProject(firstProjectId),
+          documentsApi.findByProject(firstProjectId),
+        ]);
+
+        setSubmittals(submittalData);
+        setDocuments(documentData);
+      } else {
+        setSelectedProjectId('');
+        setSubmittals([]);
+        setDocuments([]);
       }
     } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load projects'));
+      setMessage(getErrorMessage(error, 'Failed to load submittals'));
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
   }
 
@@ -129,36 +154,44 @@ export default function SubmittalsPage() {
       return;
     }
 
-    try {
-      setLoading(true);
-      setMessage('');
+    const [submittalData, documentData] = await Promise.all([
+      submittalsApi.findByProject(projectId),
+      documentsApi.findByProject(projectId),
+    ]);
 
-      const [submittalData, documentData] = await Promise.all([
-        submittalsApi.findByProject(projectId),
-        documentsApi.findByProject(projectId),
-      ]);
-
-      setSubmittals(submittalData);
-      setDocuments(documentData);
-    } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load submittals'));
-    } finally {
-      setLoading(false);
-    }
+    setSubmittals(submittalData);
+    setDocuments(documentData);
   }
 
   async function handleProjectChange(value: string) {
-    const projectId = Number(value);
+    try {
+      setActionLoading(true);
+      setMessage('');
 
-    setSelectedProjectId(projectId || '');
-    setSelectedSubmittalId('');
-    setSelectedSubmittal(null);
-    setEditingSubmittal(null);
-    setReviewComments('');
-    setForm({ ...emptyForm, projectId, documentId: undefined });
+      const projectId = Number(value);
 
-    if (projectId) {
-      await loadProjectData(projectId);
+      setSelectedProjectId(projectId || '');
+      setSelectedSubmittalId('');
+      setSelectedSubmittal(null);
+      setEditingSubmittal(null);
+      setReviewComments('');
+
+      setForm({
+        ...emptyForm,
+        projectId,
+        documentId: undefined,
+      });
+
+      if (projectId) {
+        await loadProjectData(projectId);
+      } else {
+        setSubmittals([]);
+        setDocuments([]);
+      }
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to load submittals'));
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -166,12 +199,16 @@ export default function SubmittalsPage() {
     name: keyof CreateSubmittalPayload,
     value: string | number | undefined,
   ) {
-    setForm((prev) => ({ ...prev, [name]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
   }
 
   function validateForm() {
     if (!form.projectId) return 'Project is required';
     if (!form.title.trim()) return 'Title is required';
+
     return '';
   }
 
@@ -186,7 +223,7 @@ export default function SubmittalsPage() {
     }
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       const payload: CreateSubmittalPayload = {
@@ -220,13 +257,18 @@ export default function SubmittalsPage() {
         ),
       );
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
   function resetForm(projectId = Number(selectedProjectId || 0)) {
     setEditingSubmittal(null);
-    setForm({ ...emptyForm, projectId, documentId: undefined });
+    setForm({
+      ...emptyForm,
+      projectId,
+      documentId: undefined,
+    });
+    setMessage('');
   }
 
   function handleEdit(item: Submittal) {
@@ -249,10 +291,13 @@ export default function SubmittalsPage() {
       reviewerId: item.reviewerId || undefined,
       documentId: item.documentId || undefined,
     });
+
+    setMessage('');
   }
 
   async function handleSubmitSubmittal(id: number) {
     const confirmed = window.confirm('Submit this submittal for review?');
+
     if (!confirmed) return;
 
     await runAction(
@@ -276,7 +321,7 @@ export default function SubmittalsPage() {
     }
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await submittalsApi.review(Number(selectedSubmittalId), {
@@ -297,12 +342,13 @@ export default function SubmittalsPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, 'Failed to review submittal'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
   async function handleClose(id: number) {
     const confirmed = window.confirm('Close this submittal?');
+
     if (!confirmed) return;
 
     await runAction(
@@ -314,6 +360,7 @@ export default function SubmittalsPage() {
 
   async function handleReopen(id: number) {
     const confirmed = window.confirm('Reopen this submittal?');
+
     if (!confirmed) return;
 
     await runAction(
@@ -324,7 +371,10 @@ export default function SubmittalsPage() {
   }
 
   async function handleDelete(id: number) {
-    const confirmed = window.confirm('Delete this submittal? This cannot be undone.');
+    const confirmed = window.confirm(
+      'Delete this submittal? This cannot be undone.',
+    );
+
     if (!confirmed) return;
 
     await runAction(
@@ -334,17 +384,32 @@ export default function SubmittalsPage() {
     );
   }
 
+  async function handleRefresh() {
+    if (!selectedProjectId) return;
+
+    try {
+      setActionLoading(true);
+      setMessage('');
+
+      await loadProjectData(Number(selectedProjectId));
+      setMessage('Submittals refreshed successfully');
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to refresh submittals'));
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function runAction(
     action: () => Promise<any>,
     successMessage: string,
     fallbackError: string,
   ) {
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await action();
-
       setMessage(successMessage);
 
       if (selectedProjectId) {
@@ -353,7 +418,7 @@ export default function SubmittalsPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, fallbackError));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
@@ -366,358 +431,561 @@ export default function SubmittalsPage() {
 
       {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      <div style={summaryGridStyle}>
-        <MetricCard label="Total Submittals" value={submittals.length} />
-        <MetricCard
-          label="Submitted"
-          value={submittals.filter((item) => item.status === 'SUBMITTED').length}
-        />
-        <MetricCard
-          label="Approved"
-          value={
-            submittals.filter(
-              (item) =>
-                item.status === 'APPROVED' ||
-                item.status === 'APPROVED_WITH_COMMENTS',
-            ).length
-          }
-        />
-        <MetricCard label="Project" value={selectedProject?.code || '-'} />
-      </div>
+      {pageLoading ? (
+        <SubmittalsLoading />
+      ) : (
+        <>
+          <div style={summaryGridStyle}>
+            <MetricCard label="Total Submittals" value={submittals.length} />
 
-      <div style={actionBarStyle}>
-        <IconActionButton
-          title="Refresh"
-          onClick={() =>
-            selectedProjectId && loadProjectData(Number(selectedProjectId))
-          }
-        >
-          <RefreshCcw size={16} /> Refresh
-        </IconActionButton>
-      </div>
-
-      <div className="module-grid">
-        <div className="module-sidebar">
-          <Card
-            title={
-              editingSubmittal
-                ? `Edit Submittal: ${editingSubmittal.code}`
-                : 'Create Submittal'
-            }
-          >
-            <form onSubmit={handleSubmitForm}>
-              <SelectField
-                label="Project"
-                value={form.projectId}
-                onChange={handleProjectChange}
-              >
-                <option value={0}>Select project</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.code} - {project.name}
-                  </option>
-                ))}
-              </SelectField>
-
-              <Input
-                label="Title"
-                value={form.title}
-                onChange={(e) => updateField('title', e.target.value)}
-                required
-              />
-
-              <TextareaField
-                label="Description"
-                value={form.description ?? ''}
-                onChange={(value) => updateField('description', value)}
-              />
-
-              <Input
-                label="Specification Reference"
-                value={form.specificationReference ?? ''}
-                onChange={(e) =>
-                  updateField('specificationReference', e.target.value)
-                }
-                placeholder="Example: Spec 03300 / Section 05 12 00"
-              />
-
-              <Input
-                label="Revision"
-                value={form.revision ?? ''}
-                onChange={(e) => updateField('revision', e.target.value)}
-              />
-
-              <Input
-                label="Due Date"
-                type="date"
-                value={form.dueDate ?? ''}
-                onChange={(e) => updateField('dueDate', e.target.value)}
-              />
-
-              <SelectField
-                label="Status"
-                value={form.status ?? 'DRAFT'}
-                onChange={(value) => updateField('status', value)}
-              >
-                {submittalStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {status.replace(/_/g, ' ')}
-                  </option>
-                ))}
-              </SelectField>
-
-              <SelectField
-                label="Linked Document"
-                value={form.documentId ?? ''}
-                onChange={(value) =>
-                  updateField('documentId', value ? Number(value) : undefined)
-                }
-              >
-                <option value="">No linked document</option>
-                {documents.map((doc) => (
-                  <option key={doc.id} value={doc.id}>
-                    {doc.code} - {doc.title}
-                  </option>
-                ))}
-              </SelectField>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button disabled={loading} style={{ flex: 1 }}>
-                  {loading ? (
-                    'Saving...'
-                  ) : editingSubmittal ? (
-                    <>
-                      <Save size={15} /> Save Changes
-                    </>
-                  ) : (
-                    'Create Submittal'
-                  )}
-                </Button>
-
-                {editingSubmittal && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={() => resetForm()}
-                  >
-                    <X size={15} /> Cancel
-                  </Button>
-                )}
-              </div>
-            </form>
-          </Card>
-
-          <Card title="Review Submittal">
-            <form onSubmit={handleReview}>
-              <SelectField
-                label="Submittal"
-                value={selectedSubmittalId}
-                onChange={(value) =>
-                  setSelectedSubmittalId(value ? Number(value) : '')
-                }
-              >
-                <option value="">Select submittal</option>
-                {submittals
-                  .filter((item) => item.status !== 'CLOSED')
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.code} - {item.title}
-                    </option>
-                  ))}
-              </SelectField>
-
-              <SelectField
-                label="Review Status"
-                value={reviewStatus}
-                onChange={(value) => {
-                  setReviewStatus(value as SubmittalStatus);
-                  setReviewComments('');
-                }}
-              >
-                {reviewStatuses.map((status) => (
-                  <option key={status} value={status}>
-                    {status.replace(/_/g, ' ')}
-                  </option>
-                ))}
-              </SelectField>
-
-              {reviewStatus === 'REJECTED' ? (
-                <TextareaField
-                  label="Rejection Reason"
-                  value={reviewComments}
-                  onChange={setReviewComments}
-                />
-              ) : (
-                <TextareaField
-                  label="Comments"
-                  value={reviewComments}
-                  onChange={setReviewComments}
-                />
-              )}
-
-              <Button disabled={loading} style={{ width: '100%' }}>
-                {loading ? (
-                  'Saving...'
-                ) : (
-                  <>
-                    <CheckCircle2 size={15} /> Save Review
-                  </>
-                )}
-              </Button>
-            </form>
-          </Card>
-        </div>
-
-        <Card title="Submittal Register">
-          <div style={toolbarStyle}>
-            <Input
-              label="Search"
-              placeholder="Search submittal no, title, document, revision..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+            <MetricCard
+              label="Submitted"
+              value={
+                submittals.filter((item) => item.status === 'SUBMITTED').length
+              }
             />
 
-            <SelectField label="Status" value={statusFilter} onChange={setStatusFilter}>
-              <option value="">All statuses</option>
-              {submittalStatuses.map((status) => (
-                <option key={status} value={status}>
-                  {status.replace(/_/g, ' ')}
-                </option>
-              ))}
-            </SelectField>
+            <MetricCard
+              label="Approved"
+              value={
+                submittals.filter(
+                  (item) =>
+                    item.status === 'APPROVED' ||
+                    item.status === 'APPROVED_WITH_COMMENTS',
+                ).length
+              }
+            />
+
+            <MetricCard label="Project" value={selectedProject?.code || '-'} />
           </div>
 
-          {loading && <p>Loading...</p>}
+          <div style={actionBarStyle}>
+            <IconActionButton
+              title="Refresh"
+              onClick={handleRefresh}
+              disabled={actionLoading || !selectedProjectId}
+            >
+              <RefreshCcw size={16} /> Refresh
+            </IconActionButton>
+          </div>
 
-          <DataTable<Submittal>
-            columns={[
-              {
-                header: 'Submittal No',
-                accessor: (row) => row.submittalNo || row.code,
-              },
-              {
-                header: 'Title',
-                accessor: 'title',
-              },
-              {
-                header: 'Spec Ref',
-                accessor: (row) => row.specificationReference || '-',
-              },
-              {
-                header: 'Revision',
-                accessor: (row) => row.revision || '-',
-              },
-              {
-                header: 'Cycle',
-                accessor: (row) => row.reviewCycle || 1,
-              },
-              {
-                header: 'Status',
-                accessor: (row) => <StatusBadge status={row.status} />,
-              },
-              {
-                header: 'Due Date',
-                accessor: (row) => formatDate(row.dueDate),
-              },
-              {
-                header: 'Document',
-                accessor: (row) => (row.document ? row.document.code : '-'),
-              },
-              {
-                header: 'Rejection Reason',
-                accessor: (row) =>
-                  row.status === 'REJECTED'
-                    ? row.rejectionReason || '-'
-                    : '-',
-              },
-              {
-                header: 'Actions',
-                accessor: (row) => (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <IconOnlyButton
-                      title="View"
-                      onClick={() => setSelectedSubmittal(row)}
-                    >
-                      <Eye size={15} />
-                    </IconOnlyButton>
+          <div className="module-grid">
+            <div className="module-sidebar">
+              <Card
+                title={
+                  editingSubmittal
+                    ? `Edit Submittal: ${editingSubmittal.code}`
+                    : 'Create Submittal'
+                }
+              >
+                <form onSubmit={handleSubmitForm} aria-busy={actionLoading}>
+                  <SelectField
+                    label="Project"
+                    value={form.projectId}
+                    disabled={actionLoading}
+                    onChange={handleProjectChange}
+                  >
+                    <option value={0}>Select project</option>
 
-                    {row.status !== 'CLOSED' && (
-                      <IconOnlyButton title="Edit" onClick={() => handleEdit(row)}>
-                        <Edit size={15} />
-                      </IconOnlyButton>
-                    )}
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.code} - {project.name}
+                      </option>
+                    ))}
+                  </SelectField>
 
-                    {(row.status === 'DRAFT' ||
-                      row.status === 'REVISE_AND_RESUBMIT') && (
-                      <IconOnlyButton
-                        title="Submit"
-                        onClick={() => handleSubmitSubmittal(row.id)}
-                        color="#2563eb"
+                  <Input
+                    label="Title"
+                    value={form.title}
+                    onChange={(e) => updateField('title', e.target.value)}
+                    required
+                  />
+
+                  <TextareaField
+                    label="Description"
+                    value={form.description ?? ''}
+                    disabled={actionLoading}
+                    onChange={(value) => updateField('description', value)}
+                  />
+
+                  <Input
+                    label="Specification Reference"
+                    value={form.specificationReference ?? ''}
+                    onChange={(e) =>
+                      updateField('specificationReference', e.target.value)
+                    }
+                    placeholder="Example: Spec 03300 / Section 05 12 00"
+                  />
+
+                  <Input
+                    label="Revision"
+                    value={form.revision ?? ''}
+                    onChange={(e) => updateField('revision', e.target.value)}
+                  />
+
+                  <Input
+                    label="Due Date"
+                    type="date"
+                    value={form.dueDate ?? ''}
+                    onChange={(e) => updateField('dueDate', e.target.value)}
+                  />
+
+                  <SelectField
+                    label="Status"
+                    value={form.status ?? 'DRAFT'}
+                    disabled={actionLoading}
+                    onChange={(value) => updateField('status', value)}
+                  >
+                    {submittalStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {status.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </SelectField>
+
+                  <SelectField
+                    label="Linked Document"
+                    value={form.documentId ?? ''}
+                    disabled={actionLoading}
+                    onChange={(value) =>
+                      updateField(
+                        'documentId',
+                        value ? Number(value) : undefined,
+                      )
+                    }
+                  >
+                    <option value="">No linked document</option>
+
+                    {documents.map((doc) => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.code} - {doc.title}
+                      </option>
+                    ))}
+                  </SelectField>
+
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button disabled={actionLoading} style={{ flex: 1 }}>
+                      {actionLoading ? (
+                        'Saving...'
+                      ) : editingSubmittal ? (
+                        <>
+                          <Save size={15} /> Save Changes
+                        </>
+                      ) : (
+                        'Create Submittal'
+                      )}
+                    </Button>
+
+                    {editingSubmittal && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => resetForm()}
+                        disabled={actionLoading}
                       >
-                        <Send size={15} />
-                      </IconOnlyButton>
-                    )}
-
-                    {row.status === 'CLOSED' || row.closedAt ? (
-                      <IconOnlyButton
-                        title="Reopen"
-                        onClick={() => handleReopen(row.id)}
-                        color="#2563eb"
-                      >
-                        <RotateCcw size={15} />
-                      </IconOnlyButton>
-                    ) : (
-                      <IconOnlyButton
-                        title="Close"
-                        onClick={() => handleClose(row.id)}
-                        color="#16a34a"
-                      >
-                        <CheckCircle2 size={15} />
-                      </IconOnlyButton>
-                    )}
-
-                    {row.status !== 'CLOSED' && !row.closedAt && (
-                      <IconOnlyButton
-                        title="Delete"
-                        onClick={() => handleDelete(row.id)}
-                        color="#dc2626"
-                      >
-                        <Trash2 size={15} />
-                      </IconOnlyButton>
+                        <X size={15} /> Cancel
+                      </Button>
                     )}
                   </div>
-                ),
-              },
-            ]}
-            data={filteredSubmittals}
-            emptyMessage="No submittals found"
-          />
-        </Card>
-      </div>
+                </form>
+              </Card>
+
+              <Card title="Review Submittal">
+                <form onSubmit={handleReview} aria-busy={actionLoading}>
+                  <SelectField
+                    label="Submittal"
+                    value={selectedSubmittalId}
+                    disabled={actionLoading}
+                    onChange={(value) =>
+                      setSelectedSubmittalId(value ? Number(value) : '')
+                    }
+                  >
+                    <option value="">Select submittal</option>
+
+                    {submittals
+                      .filter((item) => item.status !== 'CLOSED')
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.code} - {item.title}
+                        </option>
+                      ))}
+                  </SelectField>
+
+                  <SelectField
+                    label="Review Status"
+                    value={reviewStatus}
+                    disabled={actionLoading}
+                    onChange={(value) => {
+                      setReviewStatus(value as SubmittalStatus);
+                      setReviewComments('');
+                    }}
+                  >
+                    {reviewStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {status.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </SelectField>
+
+                  {reviewStatus === 'REJECTED' ? (
+                    <TextareaField
+                      label="Rejection Reason"
+                      value={reviewComments}
+                      disabled={actionLoading}
+                      onChange={setReviewComments}
+                    />
+                  ) : (
+                    <TextareaField
+                      label="Comments"
+                      value={reviewComments}
+                      disabled={actionLoading}
+                      onChange={setReviewComments}
+                    />
+                  )}
+
+                  <Button disabled={actionLoading} style={{ width: '100%' }}>
+                    {actionLoading ? (
+                      'Saving...'
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} /> Save Review
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </Card>
+            </div>
+
+            <Card title="Submittal Register">
+              <div style={toolbarStyle}>
+                <Input
+                  label="Search"
+                  placeholder="Search submittal no, title, document, revision..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+
+                <SelectField
+                  label="Status"
+                  value={statusFilter}
+                  disabled={actionLoading}
+                  onChange={setStatusFilter}
+                >
+                  <option value="">All statuses</option>
+
+                  {submittalStatuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </SelectField>
+              </div>
+
+              <DataTable<Submittal>
+                columns={[
+                  {
+                    header: 'Submittal No',
+                    accessor: (row) => row.submittalNo || row.code,
+                  },
+                  {
+                    header: 'Title',
+                    accessor: 'title',
+                  },
+                  {
+                    header: 'Spec Ref',
+                    accessor: (row) => row.specificationReference || '-',
+                  },
+                  {
+                    header: 'Revision',
+                    accessor: (row) => row.revision || '-',
+                  },
+                  {
+                    header: 'Cycle',
+                    accessor: (row) => row.reviewCycle || 1,
+                  },
+                  {
+                    header: 'Status',
+                    accessor: (row) => <StatusBadge status={row.status} />,
+                  },
+                  {
+                    header: 'Due Date',
+                    accessor: (row) => formatDate(row.dueDate),
+                  },
+                  {
+                    header: 'Document',
+                    accessor: (row) => (row.document ? row.document.code : '-'),
+                  },
+                  {
+                    header: 'Rejection Reason',
+                    accessor: (row) =>
+                      row.status === 'REJECTED'
+                        ? row.rejectionReason || '-'
+                        : '-',
+                  },
+                  {
+                    header: 'Actions',
+                    accessor: (row) => (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <IconOnlyButton
+                          title="View"
+                          disabled={actionLoading}
+                          onClick={() => setSelectedSubmittal(row)}
+                        >
+                          <Eye size={15} />
+                        </IconOnlyButton>
+
+                        {row.status !== 'CLOSED' && (
+                          <IconOnlyButton
+                            title="Edit"
+                            disabled={actionLoading}
+                            onClick={() => handleEdit(row)}
+                          >
+                            <Edit size={15} />
+                          </IconOnlyButton>
+                        )}
+
+                        {(row.status === 'DRAFT' ||
+                          row.status === 'REVISE_AND_RESUBMIT') && (
+                          <IconOnlyButton
+                            title="Submit"
+                            disabled={actionLoading}
+                            onClick={() => handleSubmitSubmittal(row.id)}
+                            color="#2563eb"
+                          >
+                            <Send size={15} />
+                          </IconOnlyButton>
+                        )}
+
+                        {row.status === 'CLOSED' || row.closedAt ? (
+                          <IconOnlyButton
+                            title="Reopen"
+                            disabled={actionLoading}
+                            onClick={() => handleReopen(row.id)}
+                            color="#2563eb"
+                          >
+                            <RotateCcw size={15} />
+                          </IconOnlyButton>
+                        ) : (
+                          <IconOnlyButton
+                            title="Close"
+                            disabled={actionLoading}
+                            onClick={() => handleClose(row.id)}
+                            color="#16a34a"
+                          >
+                            <CheckCircle2 size={15} />
+                          </IconOnlyButton>
+                        )}
+
+                        {row.status !== 'CLOSED' && !row.closedAt && (
+                          <IconOnlyButton
+                            title="Delete"
+                            disabled={actionLoading}
+                            onClick={() => handleDelete(row.id)}
+                            color="#dc2626"
+                          >
+                            <Trash2 size={15} />
+                          </IconOnlyButton>
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+                data={filteredSubmittals}
+                emptyMessage={
+                  selectedProjectId
+                    ? 'No submittals found'
+                    : 'Select a project to view submittals'
+                }
+              />
+            </Card>
+          </div>
+        </>
+      )}
 
       {selectedSubmittal && (
         <SubmittalDetailsModal
           submittal={selectedSubmittal}
           onClose={() => setSelectedSubmittal(null)}
+          actionLoading={actionLoading}
         />
       )}
     </div>
   );
 }
 
+function SubmittalsLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'submittals-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>Loading submittals</strong>
+
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving technical submissions, linked documents, review status,
+              and workflow records from the server. Please wait.
+            </p>
+          </div>
+        </div>
+
+        <div style={summaryGridStyle}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} style={metricCardStyle}>
+              <Skeleton width="60%" height={13} />
+              <Skeleton width="40%" height={28} marginTop={12} />
+            </div>
+          ))}
+        </div>
+
+        <div style={actionBarStyle}>
+          <Skeleton width="110px" height={38} />
+        </div>
+
+        <div className="module-grid">
+          <div className="module-sidebar">
+            {Array.from({ length: 2 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: cardIndex === 0 ? 520 : 360,
+                  padding: 18,
+                  marginBottom: 16,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="170px" height={18} />
+
+                {Array.from({ length: cardIndex === 0 ? 9 : 6 }).map(
+                  (_, index) => (
+                    <Skeleton
+                      key={index}
+                      width="100%"
+                      height={36}
+                      marginTop={18}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div
+            style={{
+              minHeight: 620,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="170px" height={18} />
+
+            <div style={toolbarStyle}>
+              <Skeleton width="100%" height={38} marginTop={20} />
+              <Skeleton width="100%" height={38} marginTop={20} />
+            </div>
+
+            {Array.from({ length: 10 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={30}
+                marginTop={20}
+              />
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @keyframes submittals-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes submittals-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'submittals-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 function SubmittalDetailsModal({
   submittal,
   onClose,
+  actionLoading,
 }: {
   submittal: Submittal;
   onClose: () => void;
+  actionLoading: boolean;
 }) {
   return (
     <div style={modalOverlayStyle} role="dialog" aria-modal="true">
       <div style={modalStyle}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-          <h2 style={{ margin: 0 }}>{submittal.code} - {submittal.title}</h2>
-          <Button type="button" variant="secondary" onClick={onClose}>
+          <h2 style={{ margin: 0 }}>
+            {submittal.code} - {submittal.title}
+          </h2>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onClose}
+            disabled={actionLoading}
+          >
             <X size={15} /> Close
           </Button>
         </div>
@@ -731,12 +999,26 @@ function SubmittalDetailsModal({
                 : '-'
             }
           />
-          <Detail label="Submittal No" value={submittal.submittalNo || submittal.code} />
-          <Detail label="Status" value={String(submittal.status).replace(/_/g, ' ')} />
-          <Detail label="Specification Reference" value={submittal.specificationReference || '-'} />
+
+          <Detail
+            label="Submittal No"
+            value={submittal.submittalNo || submittal.code}
+          />
+
+          <Detail
+            label="Status"
+            value={String(submittal.status).replace(/_/g, ' ')}
+          />
+
+          <Detail
+            label="Specification Reference"
+            value={submittal.specificationReference || '-'}
+          />
+
           <Detail label="Revision" value={submittal.revision || '-'} />
           <Detail label="Review Cycle" value={String(submittal.reviewCycle || 1)} />
           <Detail label="Due Date" value={formatDate(submittal.dueDate)} />
+
           <Detail
             label="Document"
             value={
@@ -745,6 +1027,7 @@ function SubmittalDetailsModal({
                 : '-'
             }
           />
+
           <Detail label="Reviewer" value={submittal.reviewer?.name || '-'} />
           <Detail label="Comments" value={submittal.comments || '-'} wide />
           <Detail
@@ -807,17 +1090,24 @@ function IconActionButton({
   children,
   title,
   onClick,
+  disabled = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClick: () => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      style={iconActionButtonStyle}
+      disabled={disabled}
+      style={{
+        ...iconActionButtonStyle,
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
     >
       {children}
     </button>
@@ -829,18 +1119,26 @@ function IconOnlyButton({
   title,
   onClick,
   color,
+  disabled = false,
 }: {
   children: React.ReactNode;
   title: string;
   onClick: () => void;
   color?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       title={title}
       onClick={onClick}
-      style={{ ...iconOnlyButtonStyle, color: color || '#334155' }}
+      disabled={disabled}
+      style={{
+        ...iconOnlyButtonStyle,
+        color: color || '#334155',
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
     >
       {children}
     </button>
@@ -852,21 +1150,29 @@ function SelectField({
   value,
   onChange,
   children,
+  disabled = false,
 }: {
   label: string;
   value: string | number;
   onChange: (value: string) => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
         {label}
       </label>
+
       <select
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        style={fieldStyle}
+        style={{
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
       >
         {children}
       </select>
@@ -878,21 +1184,30 @@ function TextareaField({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
         {label}
       </label>
+
       <textarea
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         rows={4}
-        style={{ ...fieldStyle, resize: 'vertical' }}
+        style={{
+          ...fieldStyle,
+          resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
       />
     </div>
   );
@@ -981,7 +1296,6 @@ const fieldStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 8,
   border: '1px solid #d1d5db',
-  background: '#fff',
 };
 
 const iconActionButtonStyle: React.CSSProperties = {
@@ -994,7 +1308,6 @@ const iconActionButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
-  cursor: 'pointer',
   fontWeight: 700,
 };
 
@@ -1007,7 +1320,6 @@ const iconOnlyButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  cursor: 'pointer',
 };
 
 const modalOverlayStyle: React.CSSProperties = {

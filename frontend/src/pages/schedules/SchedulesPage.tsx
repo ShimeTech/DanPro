@@ -10,6 +10,7 @@ import type {
 
 import PermissionGuard from '../../components/auth/PermissionGuard';
 import { Button, Card, DataTable, Input, PageHeader } from '../../components/ui';
+
 import { Eye } from 'lucide-react';
 import { Pencil } from 'lucide-react';
 import { Settings2 } from 'lucide-react';
@@ -31,7 +32,14 @@ type BaselineForm = CreateBaselinePayload & {
   revisionReason?: string;
 };
 
-type SortKey = 'version' | 'name' | 'status' | 'isActive' | 'createdAt' | 'approvedAt';
+type SortKey =
+  | 'version'
+  | 'name'
+  | 'status'
+  | 'isActive'
+  | 'createdAt'
+  | 'approvedAt';
+
 type SortDirection = 'asc' | 'desc';
 
 const emptyForm: BaselineForm = {
@@ -52,30 +60,36 @@ const statusOptions = [
   { value: 'SUPERSEDED', label: 'Superseded' },
 ];
 
-const allowedStatuses = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'SUPERSEDED'];
-
 export default function SchedulesPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [baselines, setBaselines] = useState<ScheduleBaseline[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | ''>('');
-  const [editingBaseline, setEditingBaseline] = useState<ScheduleBaseline | null>(null);
-  const [viewingBaseline, setViewingBaseline] = useState<ScheduleBaseline | null>(null);
+  const [editingBaseline, setEditingBaseline] =
+    useState<ScheduleBaseline | null>(null);
+  const [viewingBaseline, setViewingBaseline] =
+    useState<ScheduleBaseline | null>(null);
 
   const [form, setForm] = useState<BaselineForm>(emptyForm);
-  const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [activeFilter, setActiveFilter] =
+    useState<'all' | 'active' | 'inactive'>('all');
   const [sortKey, setSortKey] = useState<SortKey>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  const [statusModalBaseline, setStatusModalBaseline] =
+    useState<ScheduleBaseline | null>(null);
+  const [statusModalValue, setStatusModalValue] = useState('');
 
   const isSuccess = message.toLowerCase().includes('successfully');
 
   useEffect(() => {
-    loadProjects();
+    loadInitialData();
   }, []);
 
   const selectedProject = useMemo(
@@ -106,83 +120,40 @@ export default function SchedulesPage() {
       })
       .sort((a, b) => compareBaseline(a, b, sortKey, sortDirection));
   }, [baselines, search, statusFilter, activeFilter, sortKey, sortDirection]);
-  const [statusModalBaseline, setStatusModalBaseline] =
-    useState<ScheduleBaseline | null>(null);
-  const [statusModalValue, setStatusModalValue] = useState('');
-  async function loadProjects() {
+
+  async function loadInitialData() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
 
-      const data = await projectsApi.findAll();
-      setProjects(data);
+      const projectData = await projectsApi.findAll();
+      setProjects(projectData);
 
-      if (data.length > 0) {
-        await handleProjectChange(String(data[0].id));
+      if (projectData.length > 0) {
+        const firstProjectId = projectData[0].id;
+
+        setSelectedProjectId(firstProjectId);
+        setForm({
+          ...emptyForm,
+          projectId: firstProjectId,
+        });
+
+        const baselineData = await schedulesApi.findByProject(firstProjectId);
+        setBaselines(baselineData);
+      } else {
+        setSelectedProjectId('');
+        setBaselines([]);
       }
     } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load projects'));
+      setMessage(getErrorMessage(error, 'Failed to load schedule baselines'));
     } finally {
-      setLoading(false);
-    }
-  }
-  async function handleConfirmStatusChange() {
-    if (!statusModalBaseline) return;
-
-    const normalizedStatus = statusModalValue.trim().toUpperCase();
-
-    if (normalizedStatus === statusModalBaseline.status) {
-      setStatusModalBaseline(null);
-      return;
-    }
-
-    setStatusModalBaseline(null);
-
-    if (normalizedStatus === 'PENDING_APPROVAL') {
-      return handleSubmitForApproval(statusModalBaseline.id);
-    }
-
-    if (normalizedStatus === 'APPROVED') {
-      return handleApprove(statusModalBaseline.id);
-    }
-
-    if (normalizedStatus === 'REJECTED') {
-      return handleReject(statusModalBaseline.id);
-    }
-
-    if (normalizedStatus === 'SUPERSEDED') {
-      return handleDeactivate(statusModalBaseline.id);
-    }
-
-    if (normalizedStatus === 'DRAFT') {
-      return handleActivate(statusModalBaseline.id);
+      setPageLoading(false);
     }
   }
 
-  async function handleUnlock(id: number) {
-    const confirmed = window.confirm(
-      'Create revision from this approved baseline?',
-    );
-
-    if (!confirmed) return;
-
-    await runBaselineAction(
-      () => schedulesApi.unlockBaseline(id),
-      'Revision baseline created successfully',
-      'Failed to create revision baseline',
-    );
-  }
   async function loadBaselines(projectId: number) {
-    try {
-      setLoading(true);
-      setMessage('');
-      const data = await schedulesApi.findByProject(projectId);
-      setBaselines(data);
-    } catch (error: any) {
-      setMessage(getErrorMessage(error, 'Failed to load baselines'));
-    } finally {
-      setLoading(false);
-    }
+    const data = await schedulesApi.findByProject(projectId);
+    setBaselines(data);
   }
 
   function updateField(name: keyof BaselineForm, value: string | number) {
@@ -190,17 +161,26 @@ export default function SchedulesPage() {
   }
 
   async function handleProjectChange(value: string) {
-    const projectId = Number(value);
+    try {
+      setActionLoading(true);
+      setMessage('');
 
-    setSelectedProjectId(projectId || '');
-    setEditingBaseline(null);
-    setViewingBaseline(null);
-    setForm({ ...emptyForm, projectId });
+      const projectId = Number(value);
 
-    if (projectId) {
-      await loadBaselines(projectId);
-    } else {
-      setBaselines([]);
+      setSelectedProjectId(projectId || '');
+      setEditingBaseline(null);
+      setViewingBaseline(null);
+      setForm({ ...emptyForm, projectId });
+
+      if (projectId) {
+        await loadBaselines(projectId);
+      } else {
+        setBaselines([]);
+      }
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to load baselines'));
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -210,7 +190,9 @@ export default function SchedulesPage() {
 
   function handleLocked(baseline: ScheduleBaseline) {
     setViewingBaseline(baseline);
-    setMessage('This baseline is approved and locked. Approved baselines are controlled records and cannot be edited.');
+    setMessage(
+      'This baseline is approved and locked. Approved baselines are controlled records and cannot be edited.',
+    );
   }
 
   function handleEdit(baseline: ScheduleBaseline) {
@@ -242,14 +224,16 @@ export default function SchedulesPage() {
 
   function cancelEdit() {
     setEditingBaseline(null);
-    setForm({ ...emptyForm, projectId: selectedProjectId ? Number(selectedProjectId) : 0 });
+    setForm({
+      ...emptyForm,
+      projectId: selectedProjectId ? Number(selectedProjectId) : 0,
+    });
+    setMessage('');
   }
 
   function validateForm() {
     if (!form.projectId) return 'Select project first';
     if (!form.name.trim()) return 'Baseline name is required';
-
-
 
     if (form.plannedStartDate && form.plannedFinishDate) {
       if (new Date(form.plannedStartDate) > new Date(form.plannedFinishDate)) {
@@ -264,13 +248,14 @@ export default function SchedulesPage() {
     e.preventDefault();
 
     const validationError = validateForm();
+
     if (validationError) {
       setMessage(validationError);
       return;
     }
 
     try {
-      setSubmitting(true);
+      setActionLoading(true);
       setMessage('');
 
       const payload: CreateBaselinePayload = {
@@ -289,21 +274,27 @@ export default function SchedulesPage() {
 
       setEditingBaseline(null);
       setForm({ ...emptyForm, projectId: Number(form.projectId) });
+
       await loadBaselines(Number(form.projectId));
     } catch (error: any) {
       setMessage(
         getErrorMessage(
           error,
-          editingBaseline ? 'Failed to update schedule baseline' : 'Failed to create schedule baseline',
+          editingBaseline
+            ? 'Failed to update schedule baseline'
+            : 'Failed to create schedule baseline',
         ),
       );
     } finally {
-      setSubmitting(false);
+      setActionLoading(false);
     }
   }
 
   async function handleSubmitForApproval(id: number) {
-    const confirmed = window.confirm('Submit this schedule baseline for approval?');
+    const confirmed = window.confirm(
+      'Submit this schedule baseline for approval?',
+    );
+
     if (!confirmed) return;
 
     await runBaselineAction(
@@ -314,7 +305,10 @@ export default function SchedulesPage() {
   }
 
   async function handleApprove(id: number) {
-    const confirmed = window.confirm('Approve this schedule baseline? Approved baselines become controlled records and cannot be edited.');
+    const confirmed = window.confirm(
+      'Approve this schedule baseline? Approved baselines become controlled records and cannot be edited.',
+    );
+
     if (!confirmed) return;
 
     await runBaselineAction(
@@ -326,6 +320,7 @@ export default function SchedulesPage() {
 
   async function handleReject(id: number) {
     const reason = window.prompt('Enter rejection reason');
+
     if (!reason) return;
 
     await runBaselineAction(
@@ -336,7 +331,10 @@ export default function SchedulesPage() {
   }
 
   async function handleDeactivate(id: number) {
-    const confirmed = window.confirm('Deactivate this schedule baseline? It will remain in the audit history.');
+    const confirmed = window.confirm(
+      'Deactivate this schedule baseline? It will remain in the audit history.',
+    );
+
     if (!confirmed) return;
 
     await runBaselineAction(
@@ -348,6 +346,7 @@ export default function SchedulesPage() {
 
   async function handleActivate(id: number) {
     const confirmed = window.confirm('Activate this schedule baseline?');
+
     if (!confirmed) return;
 
     await runBaselineAction(
@@ -358,7 +357,10 @@ export default function SchedulesPage() {
   }
 
   async function handleDelete(id: number) {
-    const confirmed = window.confirm('Permanently delete this draft baseline? Only draft or inactive records should be deleted.');
+    const confirmed = window.confirm(
+      'Permanently delete this draft baseline? Only draft or inactive records should be deleted.',
+    );
+
     if (!confirmed) return;
 
     await runBaselineAction(
@@ -368,15 +370,68 @@ export default function SchedulesPage() {
     );
   }
 
+  async function handleUnlock(id: number) {
+    const confirmed = window.confirm(
+      'Create revision from this approved baseline?',
+    );
+
+    if (!confirmed) return;
+
+    await runBaselineAction(
+      () => schedulesApi.unlockBaseline(id),
+      'Revision baseline created successfully',
+      'Failed to create revision baseline',
+    );
+  }
+
   function handleEditStatus(baseline: ScheduleBaseline) {
     setStatusModalBaseline(baseline);
     setStatusModalValue(String(baseline.status || 'DRAFT'));
   }
 
-  async function runBaselineAction(action: () => Promise<any>, successMessage: string, fallbackError: string) {
+  async function handleConfirmStatusChange() {
+    if (!statusModalBaseline) return;
+
+    const normalizedStatus = statusModalValue.trim().toUpperCase();
+
+    if (normalizedStatus === statusModalBaseline.status) {
+      setStatusModalBaseline(null);
+      return;
+    }
+
+    const baseline = statusModalBaseline;
+    setStatusModalBaseline(null);
+
+    if (normalizedStatus === 'PENDING_APPROVAL') {
+      return handleSubmitForApproval(baseline.id);
+    }
+
+    if (normalizedStatus === 'APPROVED') {
+      return handleApprove(baseline.id);
+    }
+
+    if (normalizedStatus === 'REJECTED') {
+      return handleReject(baseline.id);
+    }
+
+    if (normalizedStatus === 'SUPERSEDED') {
+      return handleDeactivate(baseline.id);
+    }
+
+    if (normalizedStatus === 'DRAFT') {
+      return handleActivate(baseline.id);
+    }
+  }
+
+  async function runBaselineAction(
+    action: () => Promise<any>,
+    successMessage: string,
+    fallbackError: string,
+  ) {
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
+
       await action();
       setMessage(successMessage);
 
@@ -386,7 +441,7 @@ export default function SchedulesPage() {
     } catch (error: any) {
       setMessage(getErrorMessage(error, fallbackError));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
@@ -409,160 +464,241 @@ export default function SchedulesPage() {
 
       {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      <div style={summaryGridStyle}>
-        <MetricCard label="Total Baselines" value={baselines.length} />
-        <MetricCard label="Approved" value={baselines.filter((item) => item.status === 'APPROVED').length} />
-        <MetricCard label="Active" value={baselines.filter((item) => item.isActive).length} />
-        <MetricCard label="Controlled Project" value={selectedProject ? selectedProject.code : '-'} />
-      </div>
-
-      <div className="module-grid">
-        <PermissionGuard permissions={editingBaseline ? ['schedules:update'] : ['schedules:create']}>
-          <Card title={editingBaseline ? `Edit Baseline: ${editingBaseline.version}` : 'Create Baseline'}>
-            <form onSubmit={handleSubmit} noValidate>
-              <SelectField label="Project" value={form.projectId} onChange={handleProjectChange} required>
-                <option value={0}>Select project</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.code} - {project.name}
-                  </option>
-                ))}
-              </SelectField>
-
-              <Input
-                label="Baseline Name"
-                placeholder="Initial Approved Baseline"
-                value={form.name}
-                onChange={(e) => updateField('name', e.target.value)}
-                required
-              />
-
-              {/* <Input
-                label="Version"
-                placeholder="BL-001"
-                value={form.version}
-                onChange={(e) => updateField('version', e.target.value)}
-                required
-              /> */}
-
-              <Input
-                label="Planned Start Date"
-                type="date"
-                value={form.plannedStartDate ?? ''}
-                onChange={(e) => updateField('plannedStartDate', e.target.value)}
-              />
-
-              <Input
-                label="Planned Finish Date"
-                type="date"
-                value={form.plannedFinishDate ?? ''}
-                onChange={(e) => updateField('plannedFinishDate', e.target.value)}
-              />
-
-              <TextAreaField
-                label="Description / Basis of Baseline"
-                value={form.description ?? ''}
-                onChange={(value) => updateField('description', value)}
-                placeholder="Scope, assumptions, constraints, calendar, data date, and approval basis"
-              />
-
-              {editingBaseline && (
-                <TextAreaField
-                  label="Revision Reason"
-                  value={form.revisionReason ?? ''}
-                  onChange={(value) => updateField('revisionReason', value)}
-                  placeholder="Explain why this baseline is being revised"
-                />
-              )}
-
-              <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                <Button disabled={submitting} style={{ flex: 1 }}>
-                  {submitting ? 'Saving...' : editingBaseline ? 'Save Changes' : 'Create Baseline'}
-                </Button>
-
-                {editingBaseline && (
-                  <Button type="button" variant="secondary" onClick={cancelEdit}>
-                    Cancel
-                  </Button>
-                )}
-              </div>
-            </form>
-          </Card>
-        </PermissionGuard>
-
-        <Card title="Baseline Register">
-          <div style={toolbarStyle}>
-            <Input
-              label="Search"
-              placeholder="Search version, name, status..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+      {pageLoading ? (
+        <SchedulesLoading />
+      ) : (
+        <>
+          <div style={summaryGridStyle}>
+            <MetricCard label="Total Baselines" value={baselines.length} />
+            <MetricCard
+              label="Approved"
+              value={
+                baselines.filter((item) => item.status === 'APPROVED').length
+              }
             />
-
-            <SelectField label="Status" value={statusFilter} onChange={setStatusFilter}>
-              {statusOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </SelectField>
-
-            <SelectField label="Record State" value={activeFilter} onChange={(value) => setActiveFilter(value as any)}>
-              <option value="all">All records</option>
-              <option value="active">Active only</option>
-              <option value="inactive">Inactive only</option>
-            </SelectField>
+            <MetricCard
+              label="Active"
+              value={baselines.filter((item) => item.isActive).length}
+            />
+            <MetricCard
+              label="Controlled Project"
+              value={selectedProject ? selectedProject.code : '-'}
+            />
           </div>
 
-          {loading && <p>Loading...</p>}
+          <div className="module-grid">
+            <PermissionGuard
+              permissions={
+                editingBaseline ? ['schedules:update'] : ['schedules:create']
+              }
+            >
+              <Card
+                title={
+                  editingBaseline
+                    ? `Edit Baseline: ${editingBaseline.version}`
+                    : 'Create Baseline'
+                }
+              >
+                <form
+                  onSubmit={handleSubmit}
+                  noValidate
+                  aria-busy={actionLoading}
+                >
+                  <SelectField
+                    label="Project"
+                    value={form.projectId}
+                    disabled={actionLoading}
+                    onChange={handleProjectChange}
+                    required
+                  >
+                    <option value={0}>Select project</option>
 
-<DataTable<ScheduleBaseline>
-  columns={[
-    { header: 'Version', accessor: 'version' },
-    { header: 'Name', accessor: 'name' },
-    { header: 'Status', accessor: (row) => <StatusBadge status={row.status as BaselineStatus} /> },
+                    {projects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.code} - {project.name}
+                      </option>
+                    ))}
+                  </SelectField>
 
-    {
-      header: 'Rejection Reason',
-      accessor: (row) =>
-        row.status === 'REJECTED'
-          ? row.rejectionReason || '-'
-          : '-',
-    },
+                  <Input
+                    label="Baseline Name"
+                    placeholder="Initial Approved Baseline"
+                    value={form.name}
+                    onChange={(e) => updateField('name', e.target.value)}
+                    required
+                  />
 
-    { header: 'Active', accessor: (row) => (row.isActive ? 'Yes' : 'No') },
-    { header: 'Tasks', accessor: (row) => row.items?.length ?? 0 },
-    { header: 'Start', accessor: () => '-' },
-    { header: 'Finish', accessor: () => '-' },
-    { header: 'Approved At', accessor: (row) => formatDate(row.approvedAt) },
-    { header: 'Created', accessor: (row) => formatDate(row.createdAt) },
-    {
-      header: 'Actions',
-      accessor: (row) => (
-        <BaselineActions
-          baseline={row}
-          onView={handleView}
-          onEdit={handleEdit}
-          onLocked={handleLocked}
-          onUnlock={handleUnlock}
-          onEditStatus={handleEditStatus}
-          onSubmitForApproval={handleSubmitForApproval}
-          onApprove={handleApprove}
-          onReject={handleReject}
-          onActivate={handleActivate}
-          onDeactivate={handleDeactivate}
-          onDelete={handleDelete}
+                  <Input
+                    label="Planned Start Date"
+                    type="date"
+                    value={form.plannedStartDate ?? ''}
+                    onChange={(e) =>
+                      updateField('plannedStartDate', e.target.value)
+                    }
+                  />
+
+                  <Input
+                    label="Planned Finish Date"
+                    type="date"
+                    value={form.plannedFinishDate ?? ''}
+                    onChange={(e) =>
+                      updateField('plannedFinishDate', e.target.value)
+                    }
+                  />
+
+                  <TextAreaField
+                    label="Description / Basis of Baseline"
+                    value={form.description ?? ''}
+                    disabled={actionLoading}
+                    onChange={(value) => updateField('description', value)}
+                    placeholder="Scope, assumptions, constraints, calendar, data date, and approval basis"
+                  />
+
+                  {editingBaseline && (
+                    <TextAreaField
+                      label="Revision Reason"
+                      value={form.revisionReason ?? ''}
+                      disabled={actionLoading}
+                      onChange={(value) =>
+                        updateField('revisionReason', value)
+                      }
+                      placeholder="Explain why this baseline is being revised"
+                    />
+                  )}
+
+                  <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                    <Button disabled={actionLoading} style={{ flex: 1 }}>
+                      {actionLoading
+                        ? 'Saving...'
+                        : editingBaseline
+                          ? 'Save Changes'
+                          : 'Create Baseline'}
+                    </Button>
+
+                    {editingBaseline && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={cancelEdit}
+                        disabled={actionLoading}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                </form>
+              </Card>
+            </PermissionGuard>
+
+            <Card title="Baseline Register">
+              <div style={toolbarStyle}>
+                <Input
+                  label="Search"
+                  placeholder="Search version, name, status..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+
+                <SelectField
+                  label="Status"
+                  value={statusFilter}
+                  disabled={actionLoading}
+                  onChange={setStatusFilter}
+                >
+                  {statusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </SelectField>
+
+                <SelectField
+                  label="Record State"
+                  value={activeFilter}
+                  disabled={actionLoading}
+                  onChange={(value) => setActiveFilter(value as any)}
+                >
+                  <option value="all">All records</option>
+                  <option value="active">Active only</option>
+                  <option value="inactive">Inactive only</option>
+                </SelectField>
+              </div>
+
+              <DataTable<ScheduleBaseline>
+                columns={[
+                  { header: 'Version', accessor: 'version' },
+                  { header: 'Name', accessor: 'name' },
+                  {
+                    header: 'Status',
+                    accessor: (row) => (
+                      <StatusBadge status={row.status as BaselineStatus} />
+                    ),
+                  },
+                  {
+                    header: 'Rejection Reason',
+                    accessor: (row) =>
+                      row.status === 'REJECTED'
+                        ? row.rejectionReason || '-'
+                        : '-',
+                  },
+                  {
+                    header: 'Active',
+                    accessor: (row) => (row.isActive ? 'Yes' : 'No'),
+                  },
+                  {
+                    header: 'Tasks',
+                    accessor: (row) => row.items?.length ?? 0,
+                  },
+                  { header: 'Start', accessor: () => '-' },
+                  { header: 'Finish', accessor: () => '-' },
+                  {
+                    header: 'Approved At',
+                    accessor: (row) => formatDate(row.approvedAt),
+                  },
+                  {
+                    header: 'Created',
+                    accessor: (row) => formatDate(row.createdAt),
+                  },
+                  {
+                    header: 'Actions',
+                    accessor: (row) => (
+                      <BaselineActions
+                        baseline={row}
+                        actionLoading={actionLoading}
+                        onView={handleView}
+                        onEdit={handleEdit}
+                        onLocked={handleLocked}
+                        onUnlock={handleUnlock}
+                        onEditStatus={handleEditStatus}
+                        onSubmitForApproval={handleSubmitForApproval}
+                        onApprove={handleApprove}
+                        onReject={handleReject}
+                        onActivate={handleActivate}
+                        onDeactivate={handleDeactivate}
+                        onDelete={handleDelete}
+                      />
+                    ),
+                  },
+                ]}
+                data={filteredBaselines}
+                emptyMessage={
+                  selectedProjectId
+                    ? 'No schedule baselines found'
+                    : 'Select a project to view baselines'
+                }
+              />
+            </Card>
+          </div>
+        </>
+      )}
+
+      {viewingBaseline && (
+        <BaselineDetailsModal
+          baseline={viewingBaseline}
+          onClose={() => setViewingBaseline(null)}
         />
-      ),
-    },
-  ]}
-  data={filteredBaselines}
-  emptyMessage="No schedule baselines found"
-/>
-        </Card>
-      </div>
+      )}
 
-      {viewingBaseline && <BaselineDetailsModal baseline={viewingBaseline} onClose={() => setViewingBaseline(null)} />}
       {statusModalBaseline && (
         <div style={modalOverlayStyle} role="dialog" aria-modal="true">
           <div style={{ ...modalStyle, width: 'min(460px, 100%)' }}>
@@ -576,6 +712,7 @@ export default function SchedulesPage() {
             <SelectField
               label="Status"
               value={statusModalValue}
+              disabled={actionLoading}
               onChange={setStatusModalValue}
               required
             >
@@ -591,12 +728,17 @@ export default function SchedulesPage() {
                 type="button"
                 variant="secondary"
                 onClick={() => setStatusModalBaseline(null)}
+                disabled={actionLoading}
               >
                 Cancel
               </Button>
 
-              <Button type="button" onClick={handleConfirmStatusChange}>
-                Update Status
+              <Button
+                type="button"
+                onClick={handleConfirmStatusChange}
+                disabled={actionLoading}
+              >
+                {actionLoading ? 'Updating...' : 'Update Status'}
               </Button>
             </div>
           </div>
@@ -606,8 +748,150 @@ export default function SchedulesPage() {
   );
 }
 
+function SchedulesLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'schedules-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>
+              Loading schedule baselines
+            </strong>
+
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving project schedules, baselines, workflow status, and
+              approval records from the server. Please wait.
+            </p>
+          </div>
+        </div>
+
+        <div style={summaryGridStyle}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} style={metricCardStyle}>
+              <Skeleton width="60%" height={13} />
+              <Skeleton width="40%" height={28} marginTop={12} />
+            </div>
+          ))}
+        </div>
+
+        <div className="module-grid">
+          <div
+            style={{
+              minHeight: 520,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="170px" height={18} />
+
+            {Array.from({ length: 8 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={36}
+                marginTop={18}
+              />
+            ))}
+          </div>
+
+          <div
+            style={{
+              minHeight: 520,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="170px" height={18} />
+
+            <div style={toolbarStyle}>
+              <Skeleton width="100%" height={38} marginTop={20} />
+              <Skeleton width="100%" height={38} marginTop={20} />
+              <Skeleton width="100%" height={38} marginTop={20} />
+            </div>
+
+            {Array.from({ length: 8 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={30}
+                marginTop={20}
+              />
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @keyframes schedules-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes schedules-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'schedules-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 function BaselineActions({
   baseline,
+  actionLoading,
   onView,
   onEdit,
   onLocked,
@@ -621,15 +905,12 @@ function BaselineActions({
   onDelete,
 }: {
   baseline: ScheduleBaseline;
-
+  actionLoading: boolean;
   onView: (baseline: ScheduleBaseline) => void;
   onEdit: (baseline: ScheduleBaseline) => void;
   onLocked: (baseline: ScheduleBaseline) => void;
-
   onUnlock: (id: number) => void;
-
   onEditStatus: (baseline: ScheduleBaseline) => void;
-
   onSubmitForApproval: (id: number) => void;
   onApprove: (id: number) => void;
   onReject: (id: number) => void;
@@ -641,6 +922,7 @@ function BaselineActions({
   const isApproved = status === 'APPROVED';
   const isPending = status === 'PENDING_APPROVAL';
   const isDraft = status === 'DRAFT' || status === 'REJECTED';
+
   const iconButtonStyle: React.CSSProperties = {
     width: 34,
     height: 34,
@@ -657,6 +939,7 @@ function BaselineActions({
         type="button"
         variant="secondary"
         onClick={() => onView(baseline)}
+        disabled={actionLoading}
         style={iconButtonStyle}
         title="View Baseline"
       >
@@ -667,6 +950,7 @@ function BaselineActions({
         <Button
           type="button"
           onClick={() => onUnlock(baseline.id)}
+          disabled={actionLoading}
           style={iconButtonStyle}
           title="Create Revision"
         >
@@ -679,6 +963,7 @@ function BaselineActions({
               type="button"
               variant="secondary"
               onClick={() => onEdit(baseline)}
+              disabled={actionLoading}
               style={iconButtonStyle}
               title="Edit Baseline"
             >
@@ -693,6 +978,7 @@ function BaselineActions({
           type="button"
           variant="secondary"
           onClick={() => onEditStatus(baseline)}
+          disabled={actionLoading}
           style={iconButtonStyle}
           title="Change Status"
         >
@@ -705,6 +991,7 @@ function BaselineActions({
           <Button
             type="button"
             onClick={() => onSubmitForApproval(baseline.id)}
+            disabled={actionLoading}
             style={iconButtonStyle}
             title="Submit For Approval"
           >
@@ -715,10 +1002,22 @@ function BaselineActions({
 
       {isPending && baseline.isActive && (
         <PermissionGuard permissions={['schedules:approve']}>
-          <Button type="button" onClick={() => onApprove(baseline.id)} style={smallButtonStyle}>
+          <Button
+            type="button"
+            onClick={() => onApprove(baseline.id)}
+            disabled={actionLoading}
+            style={smallButtonStyle}
+          >
             Approve
           </Button>
-          <Button type="button" variant="danger" onClick={() => onReject(baseline.id)} style={smallButtonStyle}>
+
+          <Button
+            type="button"
+            variant="danger"
+            onClick={() => onReject(baseline.id)}
+            disabled={actionLoading}
+            style={smallButtonStyle}
+          >
             Reject
           </Button>
         </PermissionGuard>
@@ -730,6 +1029,7 @@ function BaselineActions({
             type="button"
             variant="danger"
             onClick={() => onDeactivate(baseline.id)}
+            disabled={actionLoading}
             style={iconButtonStyle}
             title="Deactivate Baseline"
           >
@@ -738,7 +1038,12 @@ function BaselineActions({
         </PermissionGuard>
       ) : (
         <PermissionGuard permissions={['schedules:update']}>
-          <Button type="button" onClick={() => onActivate(baseline.id)} style={smallButtonStyle}>
+          <Button
+            type="button"
+            onClick={() => onActivate(baseline.id)}
+            disabled={actionLoading}
+            style={smallButtonStyle}
+          >
             Activate
           </Button>
         </PermissionGuard>
@@ -746,7 +1051,13 @@ function BaselineActions({
 
       {!isApproved && !baseline.isActive && (
         <PermissionGuard permissions={['schedules:delete']}>
-          <Button type="button" variant="danger" onClick={() => onDelete(baseline.id)} style={smallButtonStyle}>
+          <Button
+            type="button"
+            variant="danger"
+            onClick={() => onDelete(baseline.id)}
+            disabled={actionLoading}
+            style={smallButtonStyle}
+          >
             Delete
           </Button>
         </PermissionGuard>
@@ -782,35 +1093,26 @@ function BaselineDetailsModal({
 
         <div style={detailsGridStyle}>
           <Detail label="Status" value={baseline.status || '-'} />
-
           <Detail
             label="Rejection Reason"
             value={baseline.rejectionReason || '-'}
             wide
           />
-
           <Detail label="Active" value={baseline.isActive ? 'Yes' : 'No'} />
           <Detail label="Tasks" value={String(baseline.items?.length ?? 0)} />
           <Detail label="Created" value={formatDate(baseline.createdAt)} />
           <Detail label="Approved At" value={formatDate(baseline.approvedAt)} />
           <Detail label="Rejected At" value={formatDate(baseline.rejectedAt)} />
           <Detail label="Submitted At" value={formatDate(baseline.submittedAt)} />
-
           <Detail
             label="Planned Start"
             value={formatDate((baseline as any).plannedStartDate)}
           />
-
           <Detail
             label="Planned Finish"
             value={formatDate((baseline as any).plannedFinishDate)}
           />
-
-          <Detail
-            label="Description"
-            value={baseline.description || '-'}
-            wide
-          />
+          <Detail label="Description" value={baseline.description || '-'} wide />
         </div>
       </div>
     </div>
@@ -823,19 +1125,32 @@ function SelectField({
   onChange,
   children,
   required,
+  disabled = false,
 }: {
   label: string;
   value?: string | number | null;
   onChange: (value: string) => void;
   children: React.ReactNode;
   required?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
       <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
         {label} {required && <span aria-label="required">*</span>}
       </label>
-      <select value={value ?? ''} onChange={(e) => onChange(e.target.value)} required={required} style={fieldStyle}>
+
+      <select
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        disabled={disabled}
+        style={{
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+      >
         {children}
       </select>
     </div>
@@ -847,27 +1162,44 @@ function TextAreaField({
   value,
   onChange,
   placeholder,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>{label}</label>
+      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>
+        {label}
+      </label>
+
       <textarea
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         rows={4}
-        style={{ ...fieldStyle, resize: 'vertical' }}
+        style={{
+          ...fieldStyle,
+          resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
+        }}
       />
     </div>
   );
 }
 
-function Alert({ type, children }: { type: 'success' | 'error'; children: React.ReactNode }) {
+function Alert({
+  type,
+  children,
+}: {
+  type: 'success' | 'error';
+  children: React.ReactNode;
+}) {
   const success = type === 'success';
 
   return (
@@ -900,24 +1232,41 @@ function MetricCard({ label, value }: { label: string; value: string | number })
 function StatusBadge({ status }: { status?: BaselineStatus }) {
   const normalizedStatus = status || 'DRAFT';
   const label = normalizedStatus.replace(/_/g, ' ');
+
   return <span style={badgeStyle(normalizedStatus)}>{label}</span>;
 }
 
-function Detail({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
+function Detail({
+  label,
+  value,
+  wide,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
   return (
     <div style={{ gridColumn: wide ? '1 / -1' : undefined }}>
-      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>{label}</div>
+      <div style={{ color: '#64748b', fontSize: 13, marginBottom: 4 }}>
+        {label}
+      </div>
       <div style={{ fontWeight: 600, whiteSpace: 'pre-wrap' }}>{value}</div>
     </div>
   );
 }
 
-function compareBaseline(a: ScheduleBaseline, b: ScheduleBaseline, sortKey: SortKey, direction: SortDirection) {
+function compareBaseline(
+  a: ScheduleBaseline,
+  b: ScheduleBaseline,
+  sortKey: SortKey,
+  direction: SortDirection,
+) {
   const aValue = getSortableValue(a, sortKey);
   const bValue = getSortableValue(b, sortKey);
 
   if (aValue < bValue) return direction === 'asc' ? -1 : 1;
   if (aValue > bValue) return direction === 'asc' ? 1 : -1;
+
   return 0;
 }
 
@@ -935,7 +1284,9 @@ function getSortableValue(row: ScheduleBaseline, key: SortKey) {
 
 function formatDate(value?: string | null) {
   if (!value) return '-';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '-';
 
   return new Intl.DateTimeFormat(undefined, {
@@ -947,8 +1298,11 @@ function formatDate(value?: string | null) {
 
 function toDateInputValue(value?: string | null) {
   if (!value) return '';
+
   const date = new Date(value);
+
   if (Number.isNaN(date.getTime())) return '';
+
   return date.toISOString().slice(0, 10);
 }
 
@@ -961,7 +1315,6 @@ const fieldStyle: React.CSSProperties = {
   padding: '10px 12px',
   borderRadius: 8,
   border: '1px solid #d1d5db',
-  background: '#fff',
 };
 
 const summaryGridStyle: React.CSSProperties = {
@@ -987,7 +1340,9 @@ const toolbarStyle: React.CSSProperties = {
   marginBottom: 16,
 };
 
-const smallButtonStyle: React.CSSProperties = { padding: '6px 10px' };
+const smallButtonStyle: React.CSSProperties = {
+  padding: '6px 10px',
+};
 
 const modalOverlayStyle: React.CSSProperties = {
   position: 'fixed',

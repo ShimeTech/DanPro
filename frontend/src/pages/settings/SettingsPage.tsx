@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Edit, Save, Search, ShieldCheck, Trash2, X } from 'lucide-react';
+import {
+  Edit,
+  RefreshCcw,
+  Save,
+  Search,
+  ShieldCheck,
+  Trash2,
+  X,
+} from 'lucide-react';
+
 import { settingsApi } from '../../api/settings.api';
 import type { Permission, Role } from '../../api/settings.api';
 import { Button, Card, DataTable, Input, PageHeader } from '../../components/ui';
@@ -14,16 +23,17 @@ export default function SettingsPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [selectedRoleId, setSelectedRoleId] = useState<number | ''>('');
-  const [selectedPermissionIds, setSelectedPermissionIds] = useState<number[]>(
-    [],
-  );
+  const [selectedPermissionIds, setSelectedPermissionIds] = useState<number[]>([]);
   const [permissionSearch, setPermissionSearch] = useState('');
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [roleForm, setRoleForm] = useState(emptyRoleForm);
-  const [loading, setLoading] = useState(false);
+
+  const [pageLoading, setPageLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   const selectedRole = roles.find((role) => role.id === Number(selectedRoleId));
+  const isSuccess = message.toLowerCase().includes('successfully');
 
   const filteredPermissions = useMemo(() => {
     const query = permissionSearch.trim().toLowerCase();
@@ -53,7 +63,7 @@ export default function SettingsPage() {
   }, [filteredPermissions]);
 
   useEffect(() => {
-    loadSettings();
+    loadInitialSettings();
   }, []);
 
   useEffect(() => {
@@ -64,9 +74,9 @@ export default function SettingsPage() {
     );
   }, [selectedRoleId, roles]);
 
-  async function loadSettings() {
+  async function loadInitialSettings() {
     try {
-      setLoading(true);
+      setPageLoading(true);
       setMessage('');
 
       const [roleData, permissionData] = await Promise.all([
@@ -77,47 +87,100 @@ export default function SettingsPage() {
       setRoles(roleData);
       setPermissions(permissionData);
 
-      if (roleData.length > 0 && !selectedRoleId) {
+      if (roleData.length > 0) {
         setSelectedRoleId(roleData[0].id);
       }
     } catch (error: any) {
-      setMessage(error.response?.data?.message || 'Failed to load settings');
+      setMessage(getErrorMessage(error, 'Failed to load settings'));
     } finally {
-      setLoading(false);
+      setPageLoading(false);
+    }
+  }
+
+  async function refreshSettings() {
+    try {
+      setActionLoading(true);
+      setMessage('');
+
+      const [roleData, permissionData] = await Promise.all([
+        settingsApi.findRoles(),
+        settingsApi.findPermissions(),
+      ]);
+
+      setRoles(roleData);
+      setPermissions(permissionData);
+
+      if (!selectedRoleId && roleData.length > 0) {
+        setSelectedRoleId(roleData[0].id);
+      }
+
+      setMessage('Settings refreshed successfully');
+    } catch (error: any) {
+      setMessage(getErrorMessage(error, 'Failed to refresh settings'));
+    } finally {
+      setActionLoading(false);
     }
   }
 
   async function saveRole(e: React.FormEvent) {
     e.preventDefault();
 
+    if (!roleForm.name.trim()) {
+      setMessage('Role name is required');
+      return;
+    }
+
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
+      const payload = {
+        ...roleForm,
+        name: roleForm.name.trim(),
+        description: roleForm.description.trim(),
+      };
+
       if (editingRole) {
-        await settingsApi.updateRole(editingRole.id, roleForm);
+        await settingsApi.updateRole(editingRole.id, payload);
         setMessage('Role updated successfully');
       } else {
-        await settingsApi.createRole(roleForm);
+        await settingsApi.createRole(payload);
         setMessage('Role created successfully');
       }
 
       resetRoleForm();
-      await loadSettings();
+      await refreshSettingsAfterAction();
     } catch (error: any) {
-      setMessage(error.response?.data?.message || 'Failed to save role');
+      setMessage(getErrorMessage(error, 'Failed to save role'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
+    }
+  }
+
+  async function refreshSettingsAfterAction() {
+    const [roleData, permissionData] = await Promise.all([
+      settingsApi.findRoles(),
+      settingsApi.findPermissions(),
+    ]);
+
+    setRoles(roleData);
+    setPermissions(permissionData);
+
+    if (!selectedRoleId && roleData.length > 0) {
+      setSelectedRoleId(roleData[0].id);
     }
   }
 
   function editRole(role: Role) {
     setEditingRole(role);
+
     setRoleForm({
       name: role.name,
       description: role.description || '',
       isSystem: role.isSystem,
     });
+
+    setMessage('');
   }
 
   async function deleteRole(role: Role) {
@@ -129,17 +192,21 @@ export default function SettingsPage() {
     if (!window.confirm(`Delete role "${role.name}"?`)) return;
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await settingsApi.removeRole(role.id);
 
+      if (selectedRoleId === role.id) {
+        setSelectedRoleId('');
+      }
+
       setMessage('Role deleted successfully');
-      await loadSettings();
+      await refreshSettingsAfterAction();
     } catch (error: any) {
-      setMessage(error.response?.data?.message || 'Failed to delete role');
+      setMessage(getErrorMessage(error, 'Failed to delete role'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
@@ -180,7 +247,7 @@ export default function SettingsPage() {
     }
 
     try {
-      setLoading(true);
+      setActionLoading(true);
       setMessage('');
 
       await settingsApi.syncPermissions(
@@ -189,11 +256,11 @@ export default function SettingsPage() {
       );
 
       setMessage('Permissions updated successfully');
-      await loadSettings();
+      await refreshSettingsAfterAction();
     } catch (error: any) {
-      setMessage(error.response?.data?.message || 'Failed to update permissions');
+      setMessage(getErrorMessage(error, 'Failed to update permissions'));
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   }
 
@@ -204,288 +271,478 @@ export default function SettingsPage() {
         description="Manage roles, permissions, RBAC access control, and system configuration."
       />
 
-      {message && (
-        <div
-          style={{
-            marginBottom: 16,
-            padding: 12,
-            background: message.toLowerCase().includes('success')
-              ? '#dcfce7'
-              : '#fee2e2',
-            color: message.toLowerCase().includes('success')
-              ? '#166534'
-              : '#991b1b',
-            border: '1px solid #e5e7eb',
-            borderRadius: 8,
-            fontWeight: 600,
-          }}
-        >
-          {message}
-        </div>
-      )}
+      {message && <Alert type={isSuccess ? 'success' : 'error'}>{message}</Alert>}
 
-      <div className="module-grid">
-        <div className="module-sidebar">
-          <Card title={editingRole ? 'Edit Role' : 'Create Role'}>
-            <form onSubmit={saveRole}>
-              <Input
-                label="Role Name"
-                value={roleForm.name}
-                onChange={(e) =>
-                  setRoleForm({ ...roleForm, name: e.target.value })
-                }
-                required
-              />
-
-              <TextareaField
-                label="Description"
-                value={roleForm.description}
-                onChange={(value) =>
-                  setRoleForm({ ...roleForm, description: value })
-                }
-              />
-
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  marginBottom: 12,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={roleForm.isSystem}
-                  onChange={(e) =>
-                    setRoleForm({
-                      ...roleForm,
-                      isSystem: e.target.checked,
-                    })
-                  }
-                />
-                System Role
-              </label>
-
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button disabled={loading} style={{ flex: 1 }}>
-                  {editingRole ? (
-                    <>
-                      <Save size={15} /> Save Changes
-                    </>
-                  ) : (
-                    'Create Role'
-                  )}
-                </Button>
-
-                {editingRole && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={resetRoleForm}
-                  >
-                    <X size={15} /> Cancel
-                  </Button>
-                )}
-              </div>
-            </form>
-          </Card>
-
-          <Card title="Permission Matrix">
-            <SelectField
-              label="Role"
-              value={selectedRoleId}
-              onChange={(value) => setSelectedRoleId(value ? Number(value) : '')}
+      {pageLoading ? (
+        <SettingsLoading />
+      ) : (
+        <>
+          <div style={actionBarStyle}>
+            <IconActionButton
+              title="Refresh Settings"
+              onClick={refreshSettings}
+              disabled={actionLoading}
             >
-              <option value="">Select role</option>
-              {roles.map((role) => (
-                <option key={role.id} value={role.id}>
-                  {role.name}
-                </option>
-              ))}
-            </SelectField>
+              <RefreshCcw size={16} /> Refresh
+            </IconActionButton>
+          </div>
 
-            <Input
-              label="Search Permissions"
-              value={permissionSearch}
-              onChange={(e) => setPermissionSearch(e.target.value)}
-              placeholder="Search module, action, description..."
-            />
+          <div className="module-grid">
+            <div className="module-sidebar">
+              <Card title={editingRole ? 'Edit Role' : 'Create Role'}>
+                <form onSubmit={saveRole} aria-busy={actionLoading}>
+                  <Input
+                    label="Role Name"
+                    value={roleForm.name}
+                    onChange={(e) =>
+                      setRoleForm({ ...roleForm, name: e.target.value })
+                    }
+                    required
+                  />
 
-            <div style={{ maxHeight: 420, overflowY: 'auto', marginTop: 12 }}>
-              {groupedPermissions.map(([module, modulePermissions]) => {
-                const modulePermissionIds = modulePermissions.map(
-                  (item) => item.id,
-                );
-                const allSelected = modulePermissionIds.every((id) =>
-                  selectedPermissionIds.includes(id),
-                );
+                  <TextareaField
+                    label="Description"
+                    value={roleForm.description}
+                    disabled={actionLoading}
+                    onChange={(value) =>
+                      setRoleForm({ ...roleForm, description: value })
+                    }
+                  />
 
-                return (
-                  <div key={module} style={{ marginBottom: 18 }}>
-                    <label
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        fontWeight: 800,
-                        textTransform: 'capitalize',
-                        borderBottom: '1px solid #e5e7eb',
-                        paddingBottom: 8,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={() => toggleModulePermissions(modulePermissions)}
-                      />
-                      {module}
-                    </label>
+                  <label style={checkboxLabelStyle}>
+                    <input
+                      type="checkbox"
+                      checked={roleForm.isSystem}
+                      disabled={actionLoading}
+                      onChange={(e) =>
+                        setRoleForm({
+                          ...roleForm,
+                          isSystem: e.target.checked,
+                        })
+                      }
+                    />
+                    System Role
+                  </label>
 
-                    {modulePermissions.map((permission) => (
-                      <label
-                        key={permission.id}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '8px 0',
-                          borderBottom: '1px solid #f1f5f9',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedPermissionIds.includes(permission.id)}
-                          onChange={() => togglePermission(permission.id)}
-                        />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Button disabled={actionLoading} style={{ flex: 1 }}>
+                      {actionLoading ? (
+                        'Saving...'
+                      ) : editingRole ? (
+                        <>
+                          <Save size={15} /> Save Changes
+                        </>
+                      ) : (
+                        'Create Role'
+                      )}
+                    </Button>
 
-                        <span>
-                          {permission.module}:{permission.action}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-
-            <Button
-              type="button"
-              disabled={loading || !selectedRoleId}
-              onClick={savePermissionMatrix}
-              style={{ width: '100%', marginTop: 12 }}
-            >
-              <ShieldCheck size={15} /> Save Permissions
-            </Button>
-          </Card>
-
-          <Card title="System Info">
-            <InfoItem label="Application" value="BuildPro IMS" />
-            <InfoItem label="Frontend" value="React + TypeScript" />
-            <InfoItem label="Backend" value="NestJS + Prisma" />
-            <InfoItem label="Database" value="MySQL" />
-            <InfoItem label="Authentication" value="JWT" />
-            <InfoItem label="Authorization" value="RBAC" />
-          </Card>
-        </div>
-
-        <div className="module-content">
-          <Card title="Roles">
-            <DataTable<Role>
-              columns={[
-                { header: 'ID', accessor: (row) => `#${row.id}` },
-                { header: 'Name', accessor: 'name' },
-                {
-                  header: 'Description',
-                  accessor: (row) => row.description || '-',
-                },
-                {
-                  header: 'System',
-                  accessor: (row) => (row.isSystem ? 'Yes' : 'No'),
-                },
-                {
-                  header: 'Permissions',
-                  accessor: (row) => row.rolePermissions?.length ?? 0,
-                },
-                {
-                  header: 'Actions',
-                  accessor: (row) => (
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    {editingRole && (
                       <Button
                         type="button"
                         variant="secondary"
-                        onClick={() => editRole(row)}
-                        style={{ padding: '6px 10px' }}
+                        onClick={resetRoleForm}
+                        disabled={actionLoading}
                       >
-                        <Edit size={14} />
+                        <X size={15} /> Cancel
                       </Button>
+                    )}
+                  </div>
+                </form>
+              </Card>
 
-                      <Button
-                        type="button"
-                        variant="danger"
-                        onClick={() => deleteRole(row)}
-                        disabled={row.isSystem}
-                        style={{ padding: '6px 10px' }}
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    </div>
-                  ),
-                },
-              ]}
-              data={roles}
-              emptyMessage="No roles found"
-            />
-          </Card>
+              <Card title="Permission Matrix">
+                <SelectField
+                  label="Role"
+                  value={selectedRoleId}
+                  disabled={actionLoading}
+                  onChange={(value) =>
+                    setSelectedRoleId(value ? Number(value) : '')
+                  }
+                >
+                  <option value="">Select role</option>
 
-          <Card
-            title={
-              selectedRole
-                ? `Permissions for ${selectedRole.name}`
-                : 'Selected Role Permissions'
-            }
-          >
-            <Input
-              label="Search Assigned Permissions"
-              value={permissionSearch}
-              onChange={(e) => setPermissionSearch(e.target.value)}
-              placeholder="Search assigned permissions..."
-            />
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.id}>
+                      {role.name}
+                    </option>
+                  ))}
+                </SelectField>
 
-            <DataTable<Permission>
-              columns={[
-                { header: 'ID', accessor: (row) => `#${row.id}` },
-                { header: 'Module', accessor: 'module' },
-                { header: 'Action', accessor: 'action' },
-                {
-                  header: 'Description',
-                  accessor: (row) => row.description || '-',
-                },
-              ]}
-              data={permissions.filter((permission) =>
-                selectedPermissionIds.includes(permission.id),
-              )}
-              emptyMessage="No permissions assigned to this role"
-            />
-          </Card>
+                <div style={{ position: 'relative' }}>
+                  <Input
+                    label="Search Permissions"
+                    value={permissionSearch}
+                    onChange={(e) => setPermissionSearch(e.target.value)}
+                    placeholder="Search module, action, description..."
+                  />
 
-          <Card title="All Permissions">
-            <DataTable<Permission>
-              columns={[
-                { header: 'ID', accessor: (row) => `#${row.id}` },
-                { header: 'Module', accessor: 'module' },
-                { header: 'Action', accessor: 'action' },
-                {
-                  header: 'Description',
-                  accessor: (row) => row.description || '-',
-                },
-              ]}
-              data={permissions}
-              emptyMessage="No permissions found"
-            />
-          </Card>
-        </div>
-      </div>
+                  <Search
+                    size={15}
+                    style={{
+                      position: 'absolute',
+                      right: 12,
+                      bottom: 12,
+                      color: '#64748b',
+                    }}
+                  />
+                </div>
+
+                <div style={permissionPanelStyle}>
+                  {groupedPermissions.map(([module, modulePermissions]) => {
+                    const modulePermissionIds = modulePermissions.map(
+                      (item) => item.id,
+                    );
+                    const allSelected = modulePermissionIds.every((id) =>
+                      selectedPermissionIds.includes(id),
+                    );
+
+                    return (
+                      <div key={module} style={{ marginBottom: 18 }}>
+                        <label style={moduleLabelStyle}>
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            disabled={actionLoading}
+                            onChange={() =>
+                              toggleModulePermissions(modulePermissions)
+                            }
+                          />
+                          {module}
+                        </label>
+
+                        {modulePermissions.map((permission) => (
+                          <label key={permission.id} style={permissionLabelStyle}>
+                            <input
+                              type="checkbox"
+                              checked={selectedPermissionIds.includes(
+                                permission.id,
+                              )}
+                              disabled={actionLoading || !selectedRoleId}
+                              onChange={() => togglePermission(permission.id)}
+                            />
+
+                            <span>
+                              {permission.module}:{permission.action}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <Button
+                  type="button"
+                  disabled={actionLoading || !selectedRoleId}
+                  onClick={savePermissionMatrix}
+                  style={{ width: '100%', marginTop: 12 }}
+                >
+                  {actionLoading ? (
+                    'Saving...'
+                  ) : (
+                    <>
+                      <ShieldCheck size={15} /> Save Permissions
+                    </>
+                  )}
+                </Button>
+              </Card>
+
+              <Card title="System Info">
+                <InfoItem label="Application" value="BuildPro IMS" />
+                <InfoItem label="Frontend" value="React + TypeScript" />
+                <InfoItem label="Backend" value="NestJS + Prisma" />
+                <InfoItem label="Database" value="MySQL" />
+                <InfoItem label="Authentication" value="JWT" />
+                <InfoItem label="Authorization" value="RBAC" />
+              </Card>
+            </div>
+
+            <div className="module-content">
+              <Card title="Roles">
+                <DataTable<Role>
+                  columns={[
+                    { header: 'ID', accessor: (row) => `#${row.id}` },
+                    { header: 'Name', accessor: 'name' },
+                    {
+                      header: 'Description',
+                      accessor: (row) => row.description || '-',
+                    },
+                    {
+                      header: 'System',
+                      accessor: (row) => (row.isSystem ? 'Yes' : 'No'),
+                    },
+                    {
+                      header: 'Permissions',
+                      accessor: (row) => row.rolePermissions?.length ?? 0,
+                    },
+                    {
+                      header: 'Actions',
+                      accessor: (row) => (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => editRole(row)}
+                            disabled={actionLoading}
+                            style={{ padding: '6px 10px' }}
+                          >
+                            <Edit size={14} />
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="danger"
+                            onClick={() => deleteRole(row)}
+                            disabled={actionLoading || row.isSystem}
+                            style={{ padding: '6px 10px' }}
+                          >
+                            <Trash2 size={14} />
+                          </Button>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  data={roles}
+                  emptyMessage="No roles found"
+                />
+              </Card>
+
+              <Card
+                title={
+                  selectedRole
+                    ? `Permissions for ${selectedRole.name}`
+                    : 'Selected Role Permissions'
+                }
+              >
+                <Input
+                  label="Search Assigned Permissions"
+                  value={permissionSearch}
+                  onChange={(e) => setPermissionSearch(e.target.value)}
+                  placeholder="Search assigned permissions..."
+                />
+
+                <DataTable<Permission>
+                  columns={[
+                    { header: 'ID', accessor: (row) => `#${row.id}` },
+                    { header: 'Module', accessor: 'module' },
+                    { header: 'Action', accessor: 'action' },
+                    {
+                      header: 'Description',
+                      accessor: (row) => row.description || '-',
+                    },
+                  ]}
+                  data={permissions.filter((permission) =>
+                    selectedPermissionIds.includes(permission.id),
+                  )}
+                  emptyMessage="No permissions assigned to this role"
+                />
+              </Card>
+
+              <Card title="All Permissions">
+                <DataTable<Permission>
+                  columns={[
+                    { header: 'ID', accessor: (row) => `#${row.id}` },
+                    { header: 'Module', accessor: 'module' },
+                    { header: 'Action', accessor: 'action' },
+                    {
+                      header: 'Description',
+                      accessor: (row) => row.description || '-',
+                    },
+                  ]}
+                  data={permissions}
+                  emptyMessage="No permissions found"
+                />
+              </Card>
+            </div>
+          </div>
+        </>
+      )}
     </div>
+  );
+}
+
+function SettingsLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'settings-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>Loading settings</strong>
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving roles, permissions, RBAC matrix, and system
+              configuration from the server.
+            </p>
+          </div>
+        </div>
+
+        <div className="module-grid">
+          <div className="module-sidebar">
+            {Array.from({ length: 3 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: cardIndex === 1 ? 520 : 220,
+                  padding: 18,
+                  marginBottom: 16,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="170px" height={18} />
+
+                {Array.from({ length: cardIndex === 1 ? 10 : 5 }).map(
+                  (_, index) => (
+                    <Skeleton
+                      key={index}
+                      width="100%"
+                      height={32}
+                      marginTop={18}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gap: 20 }}>
+            {Array.from({ length: 3 }).map((_, cardIndex) => (
+              <div
+                key={cardIndex}
+                style={{
+                  minHeight: 280,
+                  padding: 18,
+                  borderRadius: 14,
+                  background: '#ffffff',
+                  border: '1px solid #e5e7eb',
+                }}
+              >
+                <Skeleton width="180px" height={18} />
+
+                {Array.from({ length: 7 }).map((_, index) => (
+                  <Skeleton
+                    key={index}
+                    width="100%"
+                    height={30}
+                    marginTop={20}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @keyframes settings-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes settings-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 999,
+        background: '#e5e7eb',
+        animation: 'settings-pulse 1.4s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
+function Alert({
+  type,
+  children,
+}: {
+  type: 'success' | 'error';
+  children: React.ReactNode;
+}) {
+  const success = type === 'success';
+
+  return (
+    <div
+      role="alert"
+      style={{
+        marginBottom: 16,
+        padding: 12,
+        borderRadius: 8,
+        fontWeight: 600,
+        background: success ? '#dcfce7' : '#fee2e2',
+        color: success ? '#166534' : '#991b1b',
+        border: success ? '1px solid #86efac' : '1px solid #fca5a5',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function IconActionButton({
+  children,
+  title,
+  onClick,
+  disabled = false,
+}: {
+  children: React.ReactNode;
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...iconActionButtonStyle,
+        opacity: disabled ? 0.6 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -494,11 +751,13 @@ function SelectField({
   value,
   onChange,
   children,
+  disabled = false,
 }: {
   label: string;
   value: string | number;
   onChange: (value: string) => void;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -508,12 +767,12 @@ function SelectField({
 
       <select
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         style={{
-          width: '100%',
-          padding: '10px 12px',
-          borderRadius: 8,
-          border: '1px solid #d1d5db',
+          ...fieldStyle,
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'pointer',
         }}
       >
         {children}
@@ -526,10 +785,12 @@ function TextareaField({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div style={{ marginBottom: 12 }}>
@@ -539,14 +800,14 @@ function TextareaField({
 
       <textarea
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         rows={3}
         style={{
-          width: '100%',
-          padding: '10px 12px',
-          borderRadius: 8,
-          border: '1px solid #d1d5db',
+          ...fieldStyle,
           resize: 'vertical',
+          background: disabled ? '#f3f4f6' : '#ffffff',
+          cursor: disabled ? 'not-allowed' : 'text',
         }}
       />
     </div>
@@ -570,3 +831,65 @@ function InfoItem({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
+function getErrorMessage(error: any, fallback: string) {
+  return error?.response?.data?.message || error?.message || fallback;
+}
+
+const actionBarStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  gap: 8,
+  marginBottom: 16,
+};
+
+const iconActionButtonStyle: React.CSSProperties = {
+  minHeight: 38,
+  padding: '8px 12px',
+  borderRadius: 10,
+  border: '1px solid #dbe3ef',
+  background: '#ffffff',
+  color: '#1e293b',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  fontWeight: 700,
+};
+
+const fieldStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 12px',
+  borderRadius: 8,
+  border: '1px solid #d1d5db',
+};
+
+const checkboxLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  marginBottom: 12,
+};
+
+const permissionPanelStyle: React.CSSProperties = {
+  maxHeight: 420,
+  overflowY: 'auto',
+  marginTop: 12,
+};
+
+const moduleLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  fontWeight: 800,
+  textTransform: 'capitalize',
+  borderBottom: '1px solid #e5e7eb',
+  paddingBottom: 8,
+};
+
+const permissionLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 0',
+  borderBottom: '1px solid #f1f5f9',
+};
