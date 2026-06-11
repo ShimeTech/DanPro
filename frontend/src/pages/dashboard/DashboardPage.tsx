@@ -43,7 +43,7 @@ const activities: Activity[] = [
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats>(initialStats);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
 
   async function loadDashboard() {
@@ -106,6 +106,7 @@ export default function DashboardPage() {
 
       {message && (
         <div
+          role="alert"
           style={{
             marginBottom: 16,
             padding: 12,
@@ -119,96 +120,202 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {loading && <p>Loading dashboard...</p>}
+      {loading ? (
+        <DashboardLoading />
+      ) : (
+        <>
+          <section
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+              gap: 16,
+              marginBottom: 24,
+            }}
+          >
+            {statCards.map((item) => (
+              <Card key={item.title}>
+                <p
+                  style={{
+                    margin: 0,
+                    color: '#6b7280',
+                    fontSize: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  {item.title}
+                </p>
 
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: 16,
-          marginBottom: 24,
-        }}
-      >
-        {statCards.map((item) => (
-          <Card key={item.title}>
-            <p
-              style={{
-                margin: 0,
-                color: '#6b7280',
-                fontSize: 14,
-                fontWeight: 600,
-              }}
-            >
-              {item.title}
-            </p>
+                <h2
+                  style={{
+                    margin: '10px 0',
+                    fontSize: 34,
+                    lineHeight: 1,
+                    color: '#111827',
+                  }}
+                >
+                  {item.value}
+                </h2>
 
-            <h2
-              style={{
-                margin: '10px 0',
-                fontSize: 34,
-                lineHeight: 1,
-                color: '#111827',
-              }}
-            >
-              {item.value}
-            </h2>
+                <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>
+                  {item.description}
+                </p>
+              </Card>
+            ))}
+          </section>
 
-            <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>
-              {item.description}
-            </p>
-          </Card>
-        ))}
-      </section>
+          <section
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)',
+              gap: 16,
+            }}
+            className="dashboard-grid"
+          >
+            <Card title="Operational Modules">
+              <DataTable<Activity>
+                columns={[
+                  {
+                    header: 'Module',
+                    accessor: 'module',
+                  },
+                  {
+                    header: 'Description',
+                    accessor: 'description',
+                  },
+                  {
+                    header: 'Status',
+                    accessor: (row) => (
+                      <span
+                        style={{
+                          color: '#15803d',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {row.status}
+                      </span>
+                    ),
+                  },
+                ]}
+                data={activities}
+              />
+            </Card>
 
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)',
-          gap: 16,
-        }}
-        className="dashboard-grid"
-      >
-        <Card title="Operational Modules">
-          <DataTable<Activity>
-            columns={[
-              {
-                header: 'Module',
-                accessor: 'module',
-              },
-              {
-                header: 'Description',
-                accessor: 'description',
-              },
-              {
-                header: 'Status',
-                accessor: (row) => (
-                  <span
-                    style={{
-                      color: '#15803d',
-                      fontWeight: 700,
-                    }}
-                  >
-                    {row.status}
-                  </span>
-                ),
-              },
-            ]}
-            data={activities}
-          />
-        </Card>
-
-        <Card title="System Health">                 
-       <div className="module-sidebar">
-            <StatusItem label="Backend API" value="Connected" />
-            <StatusItem label="Authentication" value="JWT Enabled" />
-            <StatusItem label="Authorization" value="RBAC Ready" />
-            <StatusItem label="Document Upload" value="Active" />
-            <StatusItem label="Audit Logging" value="Active" />
-            <StatusItem label="Database" value="MySQL + Prisma" />
-          </div>
-        </Card>
-      </section>
+            <Card title="System Health">
+              <div className="module-sidebar">
+                <StatusItem label="Backend API" value="Connected" />
+                <StatusItem label="Authentication" value="JWT Enabled" />
+                <StatusItem label="Authorization" value="RBAC Ready" />
+                <StatusItem label="Document Upload" value="Active" />
+                <StatusItem label="Audit Logging" value="Active" />
+                <StatusItem label="Database" value="MySQL + Prisma" />
+              </div>
+            </Card>
+          </section>
+        </>
+      )}
     </div>
+  );
+}
+
+function DashboardLoading() {
+  return (
+    <div role="status" aria-live="polite" aria-busy="true">
+      <Card>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 20,
+          }}
+        >
+          <span
+            style={{
+              width: 22,
+              height: 22,
+              border: '3px solid #e5e7eb',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'dashboard-spin 0.8s linear infinite',
+            }}
+          />
+
+          <div>
+            <strong style={{ color: '#111827' }}>Loading dashboard</strong>
+            <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
+              Retrieving live data from the server. Please wait.
+            </p>
+          </div>
+        </div>
+
+        <section
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+            gap: 16,
+          }}
+        >
+          {Array.from({ length: 6 }).map((_, index) => (
+            <div
+              key={index}
+              style={{
+                padding: 16,
+                border: '1px solid #e5e7eb',
+                borderRadius: 12,
+                background: '#ffffff',
+              }}
+            >
+              <Skeleton width="45%" height={14} />
+              <Skeleton width="35%" height={34} marginTop={14} />
+              <Skeleton width="70%" height={13} marginTop={14} />
+            </div>
+          ))}
+        </section>
+
+        <style>
+          {`
+            @keyframes dashboard-spin {
+              to {
+                transform: rotate(360deg);
+              }
+            }
+
+            @keyframes dashboard-pulse {
+              0%, 100% {
+                opacity: 1;
+              }
+              50% {
+                opacity: 0.45;
+              }
+            }
+          `}
+        </style>
+      </Card>
+    </div>
+  );
+}
+
+function Skeleton({
+  width,
+  height,
+  marginTop = 0,
+}: {
+  width: string;
+  height: number;
+  marginTop?: number;
+}) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        marginTop,
+        borderRadius: 8,
+        background: '#e5e7eb',
+        animation: 'dashboard-pulse 1.4s ease-in-out infinite',
+      }}
+    />
   );
 }
 
