@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, Outlet } from 'react-router-dom';
 import { LogOut } from 'lucide-react';
 import { authApi } from '../api/auth.api';
 import type { AuthMe } from '../api/auth.api';
 import { notificationsApi } from '../api/notifications.api';
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 
 const menuItems = [
   {
@@ -158,6 +158,7 @@ export default function DashboardLayout() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [layoutError, setLayoutError] = useState('');
+  const navigate = useNavigate();
 
   const permissions = user?.permissions ?? [];
 
@@ -202,7 +203,7 @@ export default function DashboardLayout() {
       } catch {
         localStorage.removeItem('accessToken');
         localStorage.removeItem('authUser');
-        window.location.replace('/login');
+      navigate('/login', { replace: true });
       } finally {
         if (isMounted) {
           setLoading(false);
@@ -217,11 +218,11 @@ export default function DashboardLayout() {
     };
   }, []);
 
-  function logout() {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('authUser');
-    window.location.replace('/login');
-  }
+function logout() {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('authUser');
+  navigate('/login', { replace: true });
+}
 
   const userName = user?.name || user?.email || 'User';
   const initials = getInitials(userName);

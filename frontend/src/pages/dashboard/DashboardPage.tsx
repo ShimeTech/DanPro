@@ -231,8 +231,8 @@ function DashboardLoading() {
         >
           <span
             style={{
-              width: 22,
-              height: 22,
+              width: 24,
+              height: 24,
               border: '3px solid #e5e7eb',
               borderTopColor: '#2563eb',
               borderRadius: '50%',
@@ -242,9 +242,12 @@ function DashboardLoading() {
           />
 
           <div>
-            <strong style={{ color: '#111827' }}>Loading dashboard</strong>
+            <strong style={{ color: '#111827' }}>
+              Loading dashboard data
+            </strong>
+
             <p style={{ margin: '4px 0 0', color: '#6b7280', fontSize: 14 }}>
-              Retrieving live data from the server. Please wait.
+              Retrieving live project information from the server. Please wait.
             </p>
           </div>
         </div>
@@ -254,23 +257,75 @@ function DashboardLoading() {
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
             gap: 16,
+            marginBottom: 24,
           }}
         >
           {Array.from({ length: 6 }).map((_, index) => (
             <div
               key={index}
               style={{
-                padding: 16,
-                border: '1px solid #e5e7eb',
-                borderRadius: 12,
+                padding: 18,
+                borderRadius: 14,
                 background: '#ffffff',
+                border: '1px solid #e5e7eb',
               }}
             >
-              <Skeleton width="45%" height={14} />
-              <Skeleton width="35%" height={34} marginTop={14} />
-              <Skeleton width="70%" height={13} marginTop={14} />
+              <Skeleton width="46%" height={14} />
+              <Skeleton width="34%" height={34} marginTop={16} />
+              <Skeleton width="72%" height={13} marginTop={14} />
             </div>
           ))}
+        </section>
+
+        <section
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 2fr) minmax(280px, 1fr)',
+            gap: 16,
+          }}
+          className="dashboard-grid"
+        >
+          <div
+            style={{
+              minHeight: 280,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="190px" height={18} />
+
+            {Array.from({ length: 5 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width="100%"
+                height={18}
+                marginTop={22}
+              />
+            ))}
+          </div>
+
+          <div
+            style={{
+              minHeight: 280,
+              padding: 18,
+              borderRadius: 14,
+              background: '#ffffff',
+              border: '1px solid #e5e7eb',
+            }}
+          >
+            <Skeleton width="160px" height={18} />
+
+            {Array.from({ length: 6 }).map((_, index) => (
+              <Skeleton
+                key={index}
+                width={`${72 + (index % 2) * 18}%`}
+                height={16}
+                marginTop={22}
+              />
+            ))}
+          </div>
         </section>
 
         <style>
@@ -311,7 +366,7 @@ function Skeleton({
         width,
         height,
         marginTop,
-        borderRadius: 8,
+        borderRadius: 999,
         background: '#e5e7eb',
         animation: 'dashboard-pulse 1.4s ease-in-out infinite',
       }}
